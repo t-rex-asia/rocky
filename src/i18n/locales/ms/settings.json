@@ -659,6 +659,7 @@
     },
     "customItemDialog": {
       "title": "Tambah Item Custom",
+      "quickAddTitle": "Item Custom (nama & harga bebas)",
       "nameLabel": "Nama Barang",
       "namePlaceholder": "Contoh: Neon Box 2x1m",
       "priceLabel": "Harga",
@@ -701,7 +702,8 @@
       "selectCustomerForDebt": "Pilih pelanggan dari senarai untuk transaksi hutang",
       "paymentAmountRange": "Jumlah bayar mesti antara {{symbol}}0 dan jumlah transaksi",
       "selectPaymentMethod": "Pilih kaedah untuk bayaran awal",
-      "productNotFoundLoadBill": "Produk \"{{name}}\" tidak ditemui"
+      "productNotFoundLoadBill": "Produk \"{{name}}\" tidak ditemui",
+      "noCategoryForCustom": "Buat kategori produk dahulu sebelum guna item custom"
     }
   },
   "loginScreen": {

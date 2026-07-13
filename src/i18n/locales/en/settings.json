@@ -1119,6 +1119,7 @@
     },
     "customItemDialog": {
       "title": "Add Custom Item",
+      "quickAddTitle": "Custom Item (any name & price)",
       "nameLabel": "Item Name",
       "namePlaceholder": "e.g. Neon Box 2x1m",
       "priceLabel": "Price",
@@ -1161,7 +1162,8 @@
       "selectCustomerForDebt": "Select a customer from the list for debt transactions",
       "paymentAmountRange": "Payment amount must be between {{symbol}}0 and the transaction total",
       "selectPaymentMethod": "Select a method for the initial payment",
-      "productNotFoundLoadBill": "Product \"{{name}}\" not found"
+      "productNotFoundLoadBill": "Product \"{{name}}\" not found",
+      "noCategoryForCustom": "Create a product category first before using custom items"
     }
   },
   "loginScreen": {

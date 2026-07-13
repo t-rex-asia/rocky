@@ -179,6 +179,37 @@ export default function Kasir() {
     setCustomItemPrice('');
   };
 
+  const CUSTOM_PRODUCT_SKU = '__CUSTOM__';
+
+  const openQuickCustomItem = async () => {
+    let product = await db.products.where('sku').equals(CUSTOM_PRODUCT_SKU).first();
+    if (!product) {
+      const fallbackCategory = categories?.[0];
+      if (!fallbackCategory?.id) {
+        toast.error(t('cashier.toast.noCategoryForCustom'));
+        return;
+      }
+      const now = new Date();
+      const id = await db.products.add({
+        name: 'Custom',
+        sku: CUSTOM_PRODUCT_SKU,
+        categoryId: fallbackCategory.id,
+        price: 0,
+        hpp: 0,
+        stock: 0,
+        trackStock: false,
+        isCustomPrice: true,
+        unit: 'pcs',
+        createdAt: now,
+        updatedAt: now,
+        isDeleted: 0,
+        deletedAt: null,
+      });
+      product = await db.products.get(id as number);
+    }
+    if (product) openCustomItemDialog(product);
+  };
+
   const addCustomItemToCart = () => {
     if (!customItemProduct) return;
     const trimmedName = customItemName.trim();
@@ -746,6 +777,9 @@ export default function Kasir() {
         </div>
         <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" onClick={() => setScannerOpen(true)}>
           <ScanBarcode className="w-5 h-5" />
+        </Button>
+        <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" onClick={openQuickCustomItem} title={t('cashier.customItemDialog.quickAddTitle')}>
+          <Plus className="w-5 h-5" />
         </Button>
       </div>
 
