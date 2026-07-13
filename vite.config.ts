@@ -4,8 +4,14 @@ import path from "path";
 import { componentTagger } from "lovable-tagger";
 import { VitePWA } from "vite-plugin-pwa";
 
+// Web deploys can run under a subpath (e.g. https://domain.com/kasir/) by
+// setting VITE_BASE_PATH at build time. The Capacitor/Android build never
+// sets this, so it stays at root ('/') where the native shell expects it.
+const basePath = process.env.VITE_BASE_PATH || '/';
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  base: basePath,
   server: {
     host: "::",
     port: 8080,
@@ -23,20 +29,21 @@ export default defineConfig(({ mode }) => ({
         name: "Apk Kasir Rocky Advertising",
         short_name: "Rocky Advertising",
         description: "Aplikasi kasir Rocky Advertising untuk kelola pesanan sablon, plat, stempel, batu nisan, dan produk custom lainnya.",
-        start_url: "/",
+        start_url: basePath,
+        scope: basePath,
         display: "standalone",
         background_color: "#FFFFFF",
         theme_color: "#F97316",
         orientation: "any",
         icons: [
           {
-            src: "/kasirgratisan-icon.png",
+            src: `${basePath}kasirgratisan-icon.png`,
             sizes: "192x192",
             type: "image/png",
             purpose: "any"
           },
           {
-            src: "/kasirgratisan-icon.png",
+            src: `${basePath}kasirgratisan-icon.png`,
             sizes: "512x512",
             type: "image/png",
             purpose: "any maskable",

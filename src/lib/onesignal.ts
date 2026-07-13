@@ -98,9 +98,9 @@ export function initOneSignal() {
   withOneSignal(async (OneSignal) => {
     await OneSignal.init({
       appId: APP_ID,
-      // Scope terpisah agar tidak menimpa service worker PWA di '/'.
-      serviceWorkerParam: { scope: '/push/' },
-      serviceWorkerPath: 'push/OneSignalSDKWorker.js',
+      // Scope terpisah agar tidak menimpa service worker PWA di base path ini.
+      serviceWorkerParam: { scope: `${import.meta.env.BASE_URL}push/` },
+      serviceWorkerPath: `${import.meta.env.BASE_URL}push/OneSignalSDKWorker.js`,
       allowLocalhostAsSecureOrigin: true,
     });
   });

@@ -337,7 +337,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
                   {tutorialIndex === 0 ? (
                     <>
                       <img
-                        src="/header-icon.png"
+                        src={`${import.meta.env.BASE_URL}header-icon.png`}
                         alt="Rocky Advertising"
                         className="w-28 h-28 object-contain"
                       />

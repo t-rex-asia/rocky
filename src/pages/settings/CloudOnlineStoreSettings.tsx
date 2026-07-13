@@ -343,7 +343,7 @@ export default function CloudOnlineStoreSettings() {
         setHasTemplate(false);
       };
       
-      imgTemplate.src = '/qr-template.svg';
+      imgTemplate.src = `${import.meta.env.BASE_URL}qr-template.svg`;
     };
 
     generateTemplatedQR();
