@@ -1,0 +1,52 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.vscode/
+.idea
+.kilocode
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Internal API docs — do not publish
+API.md
+DASHBOARD.md
+openapi.json
+
+# Android / Capacitor build outputs
+assets/
+android/.gradle/
+android/**/build/
+android/**/.cxx/
+android/local.properties
+android/captures/
+android/.idea/
+*.apk
+*.aab
+*.keystore
+*.jks
+keystore.properties
+
+# Knowledge base files (do not commit)
+Knowledge/
+knowledge/

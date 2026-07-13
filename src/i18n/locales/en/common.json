@@ -1,0 +1,195 @@
+{
+  "app": {
+    "name": "FreeKasir",
+    "tagline": "Free POS — Manage Your Sales with Ease 🇮🇩"
+  },
+  "nav": {
+    "home": "Home",
+    "products": "Products",
+    "cashier": "Cashier",
+    "reports": "Reports",
+    "more": "More"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "back": "Back",
+    "search": "Search",
+    "filter": "Filter",
+    "all": "All",
+    "add": "Add",
+    "yes": "Yes",
+    "no": "No",
+    "active": "Active",
+    "inactive": "Inactive",
+    "required": "*",
+    "optional": "Optional",
+    "loading": "Loading...",
+    "noData": "No data yet",
+    "confirm": "Confirm",
+    "success": "Success",
+    "error": "Failed",
+    "name": "Name",
+    "address": "Address",
+    "phone": "Phone",
+    "notes": "Notes",
+    "date": "Date",
+    "total": "Total",
+    "price": "Price",
+    "quantity": "Quantity",
+    "unit": "Unit",
+    "customer": "Customer",
+    "supplier": "Supplier",
+    "product": "Product",
+    "stock": "Stock",
+    "payment": "Payment",
+    "category": "Category",
+    "setting": "Settings",
+    "locked": {
+      "accessDenied": "Access Denied",
+      "ownerMessage": "Your account should have full access. Try refreshing the app or check your account settings.",
+      "staffNoPermission": "You don't have permission to open",
+      "contactOwner": "Contact the store owner if you think this is wrong.",
+      "backToHome": "Back to Home"
+    },
+    "notFound": "Not found",
+    "selectPlaceholder": "Select...",
+    "searchPlaceholder": "Search...",
+    "installApp": "Install as App",
+    "installHint": "Open directly from home screen, no browser needed",
+    "howToInstall": "How to Install",
+    "storageUsed": "Storage Used"
+  },
+  "whatsNew": {
+    "title": "What's New in FreeKasir",
+    "slide": "Slide {{number}}",
+    "finish": "Done",
+    "skip": "Skip"
+  },
+  "whatsNewFeatures": {
+    "2026-07-telegram-support": {
+      "title": "Telegram Support",
+      "description": "You can now contact the FreeKasir support team directly via Telegram for quick assistance, feedback, or reporting issues.",
+      "ctaLabel": "Contact Now"
+    },
+    "2026-06-join-whatsapp": {
+      "title": "Join Official WhatsApp Channel",
+      "description": "Join the official FreeKasir WhatsApp Channel to get the latest business tips, user guides, and new feature announcements directly in your WhatsApp!",
+      "ctaLabel": "Join Now"
+    },
+    "2026-06-kitchen-ticket": {
+      "title": "Print Kitchen Ticket",
+      "description": "You can now print Kitchen Tickets (orders without prices/totals) directly when saving a bill or from the Open Bill list. Features empty check boxes on the right side of each item for manual checking by the kitchen staff.",
+      "ctaLabel": "Open Cashier"
+    },
+    "2026-06-cashier-layout": {
+      "title": "Cashier Layout Grid / Rows",
+      "description": "Now you can choose the product layout in the Cashier page between Grid (large cards) or Rows (compact list). Perfect if you have many products and prefer a simpler display. Adjust via Settings → Cashier Layout.",
+      "ctaLabel": "Open Settings"
+    },
+    "2026-06-import-excel": {
+      "title": "Import Products via Excel",
+      "description": "Now you can bulk add new products using an Excel file (.xlsx) with a validation workflow. Download the standard template with category and unit references, upload the file, review data status (valid or error) in the preview, and save all valid products at once.",
+      "ctaLabel": "Manage Products"
+    },
+    "2026-06-stock-opname": {
+      "title": "Stock Opname (Stock Adjustment)",
+      "description": "Now you can conduct periodic physical product stock audits. The system supports physical stock matching manually or in bulk via downloading/uploading Excel worksheets. Stock differences will be adjusted automatically and recorded in the stock report mutations.",
+      "ctaLabel": "Start Stock Opname"
+    },
+    "2026-06-receipt-footer": {
+      "title": "Custom Receipt Footer",
+      "description": "Now you can dynamically change the text at the bottom of transaction receipts to fit your store needs. Access this setting via the new \"Receipt Footer\" menu in Settings. Changes will be reflected in real-time on the receipt preview.",
+      "ctaLabel": "Set Receipt Footer"
+    },
+    "2026-06-customer-debts": {
+      "title": "Customer Debt Payments",
+      "description": "Now cashiers can accept partial or full payment as debt for selected customers. Record installment debt payments gradually, monitor remaining balances, and view complete payment history directly from the new Debt List menu.",
+      "ctaLabel": "Open Debt List"
+    },
+    "2026-06-print-daily-closing": {
+      "title": "Print Daily Closing Report",
+      "description": "Now you can preview, download, share, and print daily sales closing reports directly to a Bluetooth thermal printer. The Reports page now defaults to the Daily tab, complete with an indicator if there are no transactions for the day.",
+      "ctaLabel": "Open Reports"
+    },
+    "2026-06-cloud-backup": {
+      "title": "Auto Backup to Cloud",
+      "description": "Your store data can now be automatically backed up to a secure cloud — keeping it safe even if your phone is lost, broken, or upgraded. Sign in with Google, choose a subscription, and set an auto-backup schedule. You can also restore data directly from the cloud anytime.",
+      "ctaLabel": "Enable Cloud Backup"
+    },
+    "2026-06-rebrand-freekasir": {
+      "title": "New Look: FreeKasir",
+      "description": "This application is now named FreeKasir with a fresh new look and colors. Your functions and data remain unchanged. Prefer other colors? You can still choose your favorite theme in Settings → Theme Color.",
+      "ctaLabel": "Change Theme Color"
+    },
+    "2026-06-stock-search-scan": {
+      "title": "Search & Scan in Stock In/Out",
+      "description": "Stock entry is now faster. On the Stock In and Stock Out pages, search products by name, SKU, or barcode — complete with camera scanning options. Amount and Buy Price fields are also formatted with thousands separators (e.g., 10,000) for readability.",
+      "ctaLabel": "Open Stock In"
+    },
+    "2026-06-export-excel": {
+      "title": "Export Reports to Excel",
+      "description": "You can now export reports to Excel files (.xlsx) directly from the Reports page. Click Export, choose a date range, and download a file containing profit & loss summaries, transaction lists, item details, and expenses.",
+      "ctaLabel": "Open Reports"
+    },
+    "2026-05-customers": {
+      "title": "Customer Data",
+      "description": "Manage customer data and link it to transactions. Search, select, or create new customers directly at checkout (optional). View customer details to inspect their complete transaction history.",
+      "ctaLabel": "Manage Customers"
+    },
+    "2026-05-unmanaged-stock": {
+      "title": "Unmanaged Stock Products",
+      "description": "Now you can sell products without managing stock, perfect for services or made-to-order food. Enable it via the \"Track Stock\" switch when adding/editing products. These products will always be available at checkout.",
+      "ctaLabel": "Manage Products"
+    },
+    "2026-05-expense-tracking": {
+      "title": "Expense Tracking",
+      "description": "Record operational expenses (electricity, salaries, rent, etc.) and view the true net profit in your reports. Your store's cashflow is now complete in one app.",
+      "ctaLabel": "Try Now"
+    },
+    "2026-05-error-boundary": {
+      "title": "Clearer Error Messages",
+      "description": "If the app experiences an unexpected error, a detailed message will now appear that you can copy and report to the developer. No more blank screens without information."
+    }
+  },
+  "error": {
+    "title": "An error occurred",
+    "description": "The application encountered an unexpected error. Try reloading the page. If it continues, copy the error details below and report to the developer.",
+    "details": "Error details",
+    "reload": "Reload",
+    "goHome": "Go to Home",
+    "copyDetails": "Copy details",
+    "copyPrompt": "Copy the following error details:",
+    "reportIssue": "Report Issue",
+    "reportTitle": "Submit Issue Report?",
+    "reportDescription": "To help with improvements, we will send detailed error logs along with your device information (such as browser type, screen size, and OS version).\n\nBy proceeding, you agree to send this device information to the developer team.",
+    "cancel": "Cancel",
+    "agreeAndSend": "Agree & Send",
+    "sending": "Sending...",
+    "sendSuccess": "Report submitted successfully. Thank you!",
+    "sendFailed": "Failed to submit report. Please try again.",
+    "networkError": "A network error occurred while submitting the report."
+  },
+  "notFound": {
+    "title": "404",
+    "message": "Oops! Page not found",
+    "returnHome": "Return to Home"
+  },
+  "index": {
+    "title": "Welcome to Your Blank App",
+    "description": "Start building your amazing project here!"
+  },
+  "themeColors": {
+    "blue": "Blue",
+    "orange": "Orange",
+    "green": "Green",
+    "purple": "Purple",
+    "red": "Red",
+    "pink": "Pink",
+    "teal": "Teal",
+    "yellow": "Yellow"
+  }
+}
