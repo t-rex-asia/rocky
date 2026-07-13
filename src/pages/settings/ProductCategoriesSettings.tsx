@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Category } from '@/lib/db';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { supabase, mapCategoryRow, categoryToRow, type SupabaseCategory } from '@/lib/supabase';
 import { Tag, Plus, Trash2, Edit2, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -11,6 +10,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import LockedPage from '@/components/LockedPage';
+import SupabaseLoginGate from '@/components/SupabaseLoginGate';
 import { useTranslation } from 'react-i18next';
 
 const emojiOptions = ['📦', '🍕', '🥤', '🍜', '🧃', '🎽', '💊', '🧹', '📱', '🛒', '🎁', '✂️'];
@@ -18,13 +18,6 @@ const emojiOptions = ['📦', '🍕', '🥤', '🍜', '🧃', '🎽', '💊', '�
 export default function ProductCategoriesSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
-  const categories = useLiveQuery(() => db.categories.where('isDeleted').equals(0).toArray());
-
-  const [catDialog, setCatDialog] = useState(false);
-  const [catName, setCatName] = useState('');
-  const [catIcon, setCatIcon] = useState('📦');
-  const [catColor, setCatColor] = useState('#FF6B35');
-  const [catEditId, setCatEditId] = useState<number | null>(null);
 
   if (!can('manage_categories_payments')) {
     return (
@@ -35,16 +28,75 @@ export default function ProductCategoriesSettings() {
     );
   }
 
+  return (
+    <SupabaseLoginGate>
+      <ProductCategoriesContent />
+    </SupabaseLoginGate>
+  );
+}
+
+function ProductCategoriesContent() {
+  const { t } = useTranslation('settings');
+  const [categories, setCategories] = useState<SupabaseCategory[] | undefined>(undefined);
+
+  const [catDialog, setCatDialog] = useState(false);
+  const [catName, setCatName] = useState('');
+  const [catIcon, setCatIcon] = useState('📦');
+  const [catColor, setCatColor] = useState('#FF6B35');
+  const [catEditId, setCatEditId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('is_deleted', 0)
+        .order('name');
+      if (active && !error && data) setCategories(data.map(mapCategoryRow));
+      if (error) console.error('Gagal memuat kategori:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('categories-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const openCatAdd = () => { setCatEditId(null); setCatName(''); setCatIcon('📦'); setCatColor('#FF6B35'); setCatDialog(true); };
-  const openCatEdit = (c: Category) => { setCatEditId(c.id!); setCatName(c.name); setCatIcon(c.icon); setCatColor(c.color); setCatDialog(true); };
+  const openCatEdit = (c: SupabaseCategory) => { setCatEditId(c.id); setCatName(c.name); setCatIcon(c.icon); setCatColor(c.color); setCatDialog(true); };
+
   const saveCat = async () => {
     if (!catName.trim()) return;
-    if (catEditId) await db.categories.update(catEditId, { name: catName.trim(), icon: catIcon, color: catColor });
-    else await db.categories.add({ name: catName.trim(), icon: catIcon, color: catColor, createdAt: new Date(), isDeleted: 0, deletedAt: null });
+    const payload = { name: catName.trim(), icon: catIcon, color: catColor };
+    const { error } = catEditId
+      ? await supabase.from('categories').update(categoryToRow(payload)).eq('id', catEditId)
+      : await supabase.from('categories').insert(categoryToRow({ ...payload, isDeleted: 0, deletedAt: null }));
+    if (error) {
+      toast.error(t('productCategory.toast.saveFailed', { defaultValue: 'Gagal menyimpan kategori' }));
+      return;
+    }
     setCatDialog(false);
     toast.success(t('productCategory.toast.saved'));
   };
-  const deleteCat = async (id: number) => { await db.categories.update(id, { isDeleted: 1, deletedAt: new Date() }); toast.success(t('productCategory.toast.deleted')); };
+
+  const deleteCat = async (id: number) => {
+    const { error } = await supabase
+      .from('categories')
+      .update(categoryToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+      .eq('id', id);
+    if (error) {
+      toast.error(t('productCategory.toast.deleteFailed', { defaultValue: 'Gagal menghapus kategori' }));
+      return;
+    }
+    toast.success(t('productCategory.toast.deleted'));
+  };
 
   return (
     <div className="px-4 pt-6 pb-4 space-y-4">
@@ -74,7 +126,7 @@ export default function ProductCategoriesSettings() {
               </div>
               <div className="flex gap-1">
                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openCatEdit(c)}><Edit2 className="w-3 h-3" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteCat(c.id!)}><Trash2 className="w-3 h-3" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteCat(c.id)}><Trash2 className="w-3 h-3" /></Button>
               </div>
             </div>
           ))}

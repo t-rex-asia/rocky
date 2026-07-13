@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged, type Product, type Category } from '@/lib/db';
-import { useState, useRef } from 'react';
+import { db, isStockManaged } from '@/lib/db';
+import { supabase, mapCategoryRow, mapProductRow, categoryToRow, productToRow, type SupabaseCategory, type SupabaseProduct } from '@/lib/supabase';
+import { useEffect, useState, useRef } from 'react';
 import { Plus, Search, Edit2, Trash2, Package as PackageIcon, Camera, X, Copy, Infinity as InfinityIcon, ScanLine, Upload, Download, AlertTriangle, CheckCircle2, XCircle, Loader2, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ import { trackEvent } from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/use-auth';
 import BarcodeScanner from '@/components/BarcodeScanner';
+import SupabaseLoginGate from '@/components/SupabaseLoginGate';
 import { useTranslation } from 'react-i18next';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '@/components/ui/table';
 import { downloadOrShareFile } from '@/lib/file-utils';
@@ -42,6 +44,14 @@ interface ParsedRow {
 }
 
 export default function Produk() {
+  return (
+    <SupabaseLoginGate>
+      <ProductsContent />
+    </SupabaseLoginGate>
+  );
+}
+
+function ProductsContent() {
   const { currentUser, can } = useAuth();
   const canManage = can('manage_products');
   const { t, i18n } = useTranslation('products');
@@ -52,7 +62,7 @@ export default function Produk() {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const [editProduct, setEditProduct] = useState<SupabaseProduct | null>(null);
   // Field tujuan hasil scan kamera: SKU atau Barcode.
   const [scanTarget, setScanTarget] = useState<'sku' | 'barcode' | null>(null);
 
@@ -79,9 +89,37 @@ export default function Produk() {
   const [photo, setPhoto] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const products = useLiveQuery(() => db.products.where('isDeleted').equals(0).toArray());
-  const categories = useLiveQuery(() => db.categories.where('isDeleted').equals(0).toArray());
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [categories, setCategories] = useState<SupabaseCategory[] | undefined>(undefined);
+  // Satuan (units) belum dipindah ke Supabase di fase ini — tetap lokal per-device.
   const units = useLiveQuery(() => db.units.where('isDeleted').equals(0).toArray());
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setProducts(data.map(mapProductRow));
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    const loadCategories = async () => {
+      const { data, error } = await supabase.from('categories').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setCategories(data.map(mapCategoryRow));
+      if (error) console.error('Gagal memuat kategori:', error);
+    };
+    loadProducts();
+    loadCategories();
+
+    const channel = supabase
+      .channel('products-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCategories)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Compose dropdown options: active master units + current product's unit if it has been deleted/renamed
   const unitOptions = (() => {
@@ -115,7 +153,7 @@ export default function Produk() {
     setDialogOpen(true);
   };
 
-  const openEdit = (p: Product) => {
+  const openEdit = (p: SupabaseProduct) => {
     setEditProduct(p);
     setName(p.name); setSku(p.sku); setCategoryId(p.categoryId.toString()); setPrice(p.price.toString()); setHpp(p.hpp.toString()); setStock(p.stock.toString()); setTrackStock(isStockManaged(p)); setIsCustomPrice(!!p.isCustomPrice); setUnit(p.unit); setBarcode(p.barcode ?? ''); setDescription(p.description ?? ''); setPhoto(p.photo);
     setDialogOpen(true);
@@ -142,17 +180,18 @@ export default function Produk() {
     if (!name.trim() || !categoryId || !sku.trim()) return;
 
     // Check SKU uniqueness
-    const existing = await db.products
-      .where('sku')
-      .equals(sku.trim())
-      .filter(p => p.isDeleted === 0)
-      .first();
+    const { data: existing } = await supabase
+      .from('products')
+      .select('id,name')
+      .eq('sku', sku.trim())
+      .eq('is_deleted', 0)
+      .maybeSingle();
     if (existing && existing.id !== editProduct?.id) {
       toast.error(t('toast.skuExists', { sku: sku.trim(), name: existing.name }));
       return;
     }
 
-    const data = {
+    const payload = {
       name: name.trim(),
       sku: sku.trim(),
       categoryId: Number(categoryId),
@@ -165,21 +204,15 @@ export default function Produk() {
       description: description.trim() || undefined,
       barcode: barcode.trim() || undefined,
       photo: photo || undefined,
-      updatedAt: new Date(),
-      updatedBy: currentUser?.id,
     };
 
     if (editProduct?.id) {
-      await db.products.update(editProduct.id, data);
+      const { error } = await supabase.from('products').update(productToRow(payload)).eq('id', editProduct.id);
+      if (error) { toast.error('Gagal menyimpan produk'); return; }
       trackEvent('edit_product');
     } else {
-      await db.products.add({
-        ...data,
-        createdAt: new Date(),
-        createdBy: currentUser?.id,
-        isDeleted: 0,
-        deletedAt: null,
-      } as Product);
+      const { error } = await supabase.from('products').insert(productToRow({ ...payload, isDeleted: 0, deletedAt: null }));
+      if (error) { toast.error('Gagal menyimpan produk'); return; }
       trackEvent('create_product');
     }
     setDialogOpen(false);
@@ -187,11 +220,11 @@ export default function Produk() {
 
   const handleDelete = async () => {
     if (deleteId) {
-      await db.products.update(deleteId, {
-        isDeleted: 1,
-        deletedAt: new Date(),
-        updatedBy: currentUser?.id,
-      });
+      const { error } = await supabase
+        .from('products')
+        .update(productToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+        .eq('id', deleteId);
+      if (error) toast.error('Gagal menghapus produk');
       setDeleteId(null);
     }
   };
@@ -334,14 +367,14 @@ export default function Produk() {
           const tempRows: ParsedRow[] = [];
           const skuInFile = new Set<string>();
 
-          // Get active db categories & units for validation
+          // Get active categories & units for validation
           const activeCats = categories || [];
           const activeUnts = units || [];
 
-          // Get existing products in DB (including isDeleted: 1)
-          const allDbProducts = await db.products.toArray();
-          const dbSkus = new Set(allDbProducts.map(p => p.sku.toLowerCase().trim()));
-          const dbProductsBySku = new Map(allDbProducts.map(p => [p.sku.toLowerCase().trim(), p.name]));
+          // Get existing products (including soft-deleted) for SKU dedup check
+          const { data: allProducts } = await supabase.from('products').select('sku,name');
+          const dbSkus = new Set((allProducts ?? []).map(p => (p.sku as string).toLowerCase().trim()));
+          const dbProductsBySku = new Map((allProducts ?? []).map(p => [(p.sku as string).toLowerCase().trim(), p.name as string]));
 
           let rowCount = 0;
           worksheet.eachRow((row, rowNumber) => {
@@ -524,35 +557,31 @@ export default function Produk() {
     }
 
     try {
-      const now = new Date();
       const activeCats = categories || [];
-      
-      const newProducts: Product[] = validRows.map(r => {
-        const matchedCat = activeCats.find(c => c.name.toLowerCase().trim() === r.categoryName.toLowerCase().trim());
-        const categoryId = matchedCat?.id || 0;
 
-        return {
+      const newProducts = validRows.map(r => {
+        const matchedCat = activeCats.find(c => c.name.toLowerCase().trim() === r.categoryName.toLowerCase().trim());
+        const catId = matchedCat?.id || 0;
+
+        return productToRow({
           name: r.name,
           sku: r.sku,
-          categoryId,
+          categoryId: catId,
           price: r.price,
           hpp: r.hpp,
           stock: r.trackStock ? r.stock : 0,
           trackStock: r.trackStock,
+          isCustomPrice: false,
           unit: r.unit,
           barcode: r.barcode,
           description: r.description,
-          photo: undefined,
-          createdAt: now,
-          updatedAt: now,
           isDeleted: 0,
           deletedAt: null,
-          createdBy: currentUser?.id,
-          updatedBy: currentUser?.id
-        };
+        });
       });
 
-      await db.products.bulkAdd(newProducts);
+      const { error } = await supabase.from('products').insert(newProducts);
+      if (error) throw error;
       trackEvent('import_products_excel');
 
       toast.success(t('excel.toastSuccess', { count: newProducts.length }));
@@ -605,7 +634,7 @@ export default function Produk() {
           <SelectContent>
             <SelectItem value="all">{t('filterAll')}</SelectItem>
             {categories?.map(c => (
-              <SelectItem key={c.id} value={c.id!.toString()}>{c.icon} {c.name}</SelectItem>
+              <SelectItem key={c.id} value={c.id.toString()}>{c.icon} {c.name}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -675,7 +704,7 @@ export default function Produk() {
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(p)}>
                           <Edit2 className="w-3.5 h-3.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(p.id!)}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => setDeleteId(p.id)}>
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       </>
@@ -769,7 +798,7 @@ export default function Produk() {
                 <SelectTrigger className="h-11"><SelectValue placeholder={t('dialog.categoryPlaceholder')} /></SelectTrigger>
                 <SelectContent>
                   {(categories && categories.length > 0) ? categories.map(c => (
-                    <SelectItem key={c.id} value={c.id!.toString()}>{c.icon} {c.name}</SelectItem>
+                    <SelectItem key={c.id} value={c.id.toString()}>{c.icon} {c.name}</SelectItem>
                   )) : (
                     <SelectItem value="__empty" disabled>{t('dialog.categoryEmpty')}</SelectItem>
                   )}
