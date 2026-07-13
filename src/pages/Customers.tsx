@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Customer } from '@/lib/db';
-import { useState } from 'react';
+import { db } from '@/lib/db';
+import { supabase, mapCustomerRow, customerToRow, type SupabaseCustomer } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
 import { Users as UsersIcon, Plus, Edit2, Trash2, Phone, MapPin, Mail, Search, Eye, Receipt as ReceiptIcon, ShoppingBag, HandCoins, ArrowLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -35,8 +36,8 @@ export default function CustomersPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
-  const [viewCustomer, setViewCustomer] = useState<Customer | null>(null);
+  const [editCustomer, setEditCustomer] = useState<SupabaseCustomer | null>(null);
+  const [viewCustomer, setViewCustomer] = useState<SupabaseCustomer | null>(null);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -44,7 +45,32 @@ export default function CustomersPage() {
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
 
-  const customers = useLiveQuery(() => db.customers.where('isDeleted').equals(0).toArray());
+  const [customers, setCustomers] = useState<SupabaseCustomer[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('is_deleted', 0)
+        .order('name');
+      if (active && !error && data) setCustomers(data.map(mapCustomerRow));
+      if (error) console.error('Gagal memuat pelanggan:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('customers-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const debts = useLiveQuery(() => db.debts.toArray());
 
   // Transaksi pelanggan yang sedang dilihat, terbaru dulu.
@@ -76,7 +102,7 @@ export default function CustomersPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (c: Customer) => {
+  const openEdit = (c: SupabaseCustomer) => {
     setEditCustomer(c);
     setName(c.name); setPhone(c.phone); setEmail(c.email); setAddress(c.address); setNotes(c.notes);
     setDialogOpen(true);
@@ -91,23 +117,30 @@ export default function CustomersPage() {
       address: address.trim(),
       notes: notes.trim(),
     };
-    if (editCustomer?.id) {
-      await db.customers.update(editCustomer.id, data);
-      toast.success(t('customers.toast.updated'));
-    } else {
-      await db.customers.add({ ...data, createdAt: new Date(), isDeleted: 0, deletedAt: null });
-      trackEvent('create_customer');
-      toast.success(t('customers.toast.added'));
+    const { error } = editCustomer?.id
+      ? await supabase.from('customers').update(customerToRow(data)).eq('id', editCustomer.id)
+      : await supabase.from('customers').insert(customerToRow({ ...data, isDeleted: 0, deletedAt: null }));
+    if (error) {
+      toast.error(t('customers.toast.saveFailed', { defaultValue: 'Gagal menyimpan pelanggan' }));
+      return;
     }
+    if (!editCustomer) trackEvent('create_customer');
+    toast.success(editCustomer ? t('customers.toast.updated') : t('customers.toast.added'));
     setDialogOpen(false);
   };
 
   const handleDelete = async () => {
-    if (deleteId) {
-      await db.customers.update(deleteId, { isDeleted: 1, deletedAt: new Date() });
-      setDeleteId(null);
-      toast.success(t('customers.toast.deleted'));
+    if (!deleteId) return;
+    const { error } = await supabase
+      .from('customers')
+      .update(customerToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+      .eq('id', deleteId);
+    setDeleteId(null);
+    if (error) {
+      toast.error(t('customers.toast.deleteFailed', { defaultValue: 'Gagal menghapus pelanggan' }));
+      return;
     }
+    toast.success(t('customers.toast.deleted'));
   };
 
   return (

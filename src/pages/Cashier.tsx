@@ -1,5 +1,13 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged, type Product, type Category, type Transaction, type TransactionItemRecord } from '@/lib/db';
+import { db, isStockManaged, type Transaction, type TransactionItemRecord } from '@/lib/db';
+import {
+  supabase,
+  mapProductRow, productToRow, type SupabaseProduct,
+  mapCategoryRow, type SupabaseCategory,
+  mapPaymentMethodRow, type SupabasePaymentMethod,
+  mapCustomerRow, type SupabaseCustomer,
+} from '@/lib/supabase';
+import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Minus, ShoppingCart, X, Percent, Tag, CreditCard, Banknote, Check, ScanBarcode, Package as PackageIcon, ClipboardList, Save, Pencil, User, Trash2, Barcode, Printer, CalendarIcon } from 'lucide-react';
 import Receipt from '@/components/Receipt';
@@ -30,7 +38,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 interface CartItem {
   cartKey: string;
-  product: Product;
+  product: SupabaseProduct;
   qty: number;
   discountType: 'percentage' | 'nominal' | null;
   discountValue: number;
@@ -97,7 +105,7 @@ export default function Kasir() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [openBillsOpen, setOpenBillsOpen] = useState(false);
   const [editingItemNotes, setEditingItemNotes] = useState<string | null>(null);
-  const [customItemProduct, setCustomItemProduct] = useState<Product | null>(null);
+  const [customItemProduct, setCustomItemProduct] = useState<SupabaseProduct | null>(null);
   const [customItemName, setCustomItemName] = useState('');
   const [customItemPrice, setCustomItemPrice] = useState('');
   const [tempItemNotes, setTempItemNotes] = useState('');
@@ -120,13 +128,55 @@ export default function Kasir() {
     }
   });
 
-  const products = useLiveQuery(() => db.products.where('isDeleted').equals(0).toArray());
-  const categories = useLiveQuery(() => db.categories.where('isDeleted').equals(0).toArray());
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [categories, setCategories] = useState<SupabaseCategory[] | undefined>(undefined);
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+  const [customers, setCustomers] = useState<SupabaseCustomer[] | undefined>(undefined);
+  const storeSettings = useMergedStoreSettings();
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setProducts(data.map(mapProductRow));
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    const loadCategories = async () => {
+      const { data, error } = await supabase.from('categories').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setCategories(data.map(mapCategoryRow));
+      if (error) console.error('Gagal memuat kategori:', error);
+    };
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    const loadCustomers = async () => {
+      const { data, error } = await supabase.from('customers').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setCustomers(data.map(mapCustomerRow));
+      if (error) console.error('Gagal memuat pelanggan:', error);
+    };
+    loadProducts();
+    loadCategories();
+    loadPaymentMethods();
+    loadCustomers();
+
+    const channel = supabase
+      .channel('cashier-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCategories)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, loadCustomers)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const openBills = useLiveQuery(() => db.transactions.where('status').equals('open').reverse().sortBy('date'));
   const allUsers = useLiveQuery(() => db.users.toArray());
-  const customers = useLiveQuery(() => db.customers.where('isDeleted').equals(0).toArray());
 
   // Permission gate — kept render-side (not redirect) so the bottom nav stays
   // intact. All hooks above run unconditionally; we just swap the rendered tree.
@@ -159,7 +209,7 @@ export default function Kasir() {
 
   // === Cart Operations ===
 
-  const addToCart = (product: Product) => {
+  const addToCart = (product: SupabaseProduct) => {
     setCart(prev => {
       const existing = prev.find(c => c.cartKey === String(product.id));
       if (existing) {
@@ -173,7 +223,7 @@ export default function Kasir() {
     });
   };
 
-  const openCustomItemDialog = (product: Product) => {
+  const openCustomItemDialog = (product: SupabaseProduct) => {
     setCustomItemProduct(product);
     setCustomItemName('');
     setCustomItemPrice('');
@@ -182,30 +232,32 @@ export default function Kasir() {
   const CUSTOM_PRODUCT_SKU = '__CUSTOM__';
 
   const openQuickCustomItem = async () => {
-    let product = await db.products.where('sku').equals(CUSTOM_PRODUCT_SKU).first();
+    const { data: existing } = await supabase.from('products').select('*').eq('sku', CUSTOM_PRODUCT_SKU).maybeSingle();
+    let product = existing ? mapProductRow(existing) : null;
     if (!product) {
       const fallbackCategory = categories?.[0];
       if (!fallbackCategory?.id) {
         toast.error(t('cashier.toast.noCategoryForCustom'));
         return;
       }
-      const now = new Date();
-      const id = await db.products.add({
-        name: 'Custom',
-        sku: CUSTOM_PRODUCT_SKU,
-        categoryId: fallbackCategory.id,
-        price: 0,
-        hpp: 0,
-        stock: 0,
-        trackStock: false,
-        isCustomPrice: true,
-        unit: 'pcs',
-        createdAt: now,
-        updatedAt: now,
-        isDeleted: 0,
-        deletedAt: null,
-      });
-      product = await db.products.get(id as number);
+      const { data: created, error } = await supabase
+        .from('products')
+        .insert(productToRow({
+          name: 'Custom',
+          sku: CUSTOM_PRODUCT_SKU,
+          categoryId: fallbackCategory.id,
+          price: 0,
+          hpp: 0,
+          stock: 0,
+          trackStock: false,
+          isCustomPrice: true,
+          unit: 'pcs',
+          isDeleted: 0,
+          deletedAt: null,
+        }))
+        .select()
+        .single();
+      if (!error && created) product = mapProductRow(created);
     }
     if (product) openCustomItemDialog(product);
   };
@@ -360,16 +412,17 @@ export default function Kasir() {
         const newQty = cartItem.qty;
         const delta = newQty - oldQty;
         if (delta !== 0) {
-          await db.products.update(cartItem.product.id!, { stock: cartItem.product.stock - delta, updatedAt: new Date() });
+          await supabase.from('products').update(productToRow({ stock: cartItem.product.stock - delta })).eq('id', cartItem.product.id);
         }
       }
       // Restore stock for removed items that were in old bill
       for (const oldItem of oldItems) {
         const stillInCart = cart.find(c => c.product.id === oldItem.productId);
         if (!stillInCart) {
-          const product = await db.products.get(oldItem.productId);
+          const { data: productRow } = await supabase.from('products').select('*').eq('id', oldItem.productId).maybeSingle();
+          const product = productRow ? mapProductRow(productRow) : null;
           if (product && isStockManaged(product)) {
-            await db.products.update(oldItem.productId, { stock: product.stock + oldItem.quantity });
+            await supabase.from('products').update(productToRow({ stock: product.stock + oldItem.quantity })).eq('id', oldItem.productId);
           }
         }
       }
@@ -423,7 +476,7 @@ export default function Kasir() {
 
       for (const item of cart) {
         if (!isStockManaged(item.product)) continue;
-        await db.products.update(item.product.id!, { stock: item.product.stock - item.qty, updatedAt: new Date() });
+        await supabase.from('products').update(productToRow({ stock: item.product.stock - item.qty })).eq('id', item.product.id);
       }
 
       toast.success(t('cashier.toast.billSaved', { receiptNumber }));
@@ -445,7 +498,8 @@ export default function Kasir() {
   const loadOpenBill = async (tx: Transaction) => {
     if (!tx.id) return;
     const items = await db.transactionItems.where('transactionId').equals(tx.id).toArray();
-    const allProducts = await db.products.where('isDeleted').equals(0).toArray();
+    const { data: productRows } = await supabase.from('products').select('*').eq('is_deleted', 0);
+    const allProducts = (productRows ?? []).map(mapProductRow);
 
     const cartItems: CartItem[] = items.map(item => {
       const product = allProducts.find(p => p.id === item.productId);
@@ -476,9 +530,10 @@ export default function Kasir() {
     if (!tx.id) return;
     const items = await db.transactionItems.where('transactionId').equals(tx.id).toArray();
     for (const item of items) {
-      const product = await db.products.get(item.productId);
+      const { data: productRow } = await supabase.from('products').select('*').eq('id', item.productId).maybeSingle();
+      const product = productRow ? mapProductRow(productRow) : null;
       if (product && isStockManaged(product)) {
-        await db.products.update(item.productId, { stock: product.stock + item.quantity });
+        await supabase.from('products').update(productToRow({ stock: product.stock + item.quantity })).eq('id', item.productId);
       }
     }
     await db.transactionItems.where('transactionId').equals(tx.id).delete();
@@ -586,15 +641,16 @@ export default function Kasir() {
         const newQty = cartItem.qty;
         const delta = newQty - oldQty;
         if (delta !== 0) {
-          await db.products.update(cartItem.product.id!, { stock: cartItem.product.stock - delta, updatedAt: new Date() });
+          await supabase.from('products').update(productToRow({ stock: cartItem.product.stock - delta })).eq('id', cartItem.product.id);
         }
       }
       for (const oldItem of oldItems) {
         const stillInCart = cart.find(c => c.product.id === oldItem.productId);
         if (!stillInCart) {
-          const product = await db.products.get(oldItem.productId);
+          const { data: productRow } = await supabase.from('products').select('*').eq('id', oldItem.productId).maybeSingle();
+          const product = productRow ? mapProductRow(productRow) : null;
           if (product && isStockManaged(product)) {
-            await db.products.update(oldItem.productId, { stock: product.stock + oldItem.quantity });
+            await supabase.from('products').update(productToRow({ stock: product.stock + oldItem.quantity })).eq('id', oldItem.productId);
           }
         }
       }
@@ -662,7 +718,7 @@ export default function Kasir() {
 
       for (const item of cart) {
         if (!isStockManaged(item.product)) continue;
-        await db.products.update(item.product.id!, { stock: item.product.stock - item.qty, updatedAt: new Date() });
+        await supabase.from('products').update(productToRow({ stock: item.product.stock - item.qty })).eq('id', item.product.id);
       }
 
       toast.success(t('cashier.toast.transactionSuccess', { receiptNumber }));

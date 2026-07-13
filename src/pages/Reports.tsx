@@ -1,5 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
+import { supabase, mapExpenseCategoryRow, mapPaymentMethodRow, type SupabaseExpenseCategory, type SupabasePaymentMethod } from '@/lib/supabase';
+import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useEffect, useState } from 'react';
 import { BarChart3, TrendingUp, ShoppingCart, Package, DollarSign, ArrowDown, ArrowUp, Minus, Wallet, CreditCard, Download, Printer } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,7 +31,7 @@ export default function Laporan() {
   const { t, i18n } = useTranslation('reports');
   const numberLocale = NUMBER_LOCALES[i18n.language] ?? 'id-ID';
   const currencySymbol = CURRENCY_SYMBOL[i18n.language] ?? 'Rp';
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const storeSettings = useMergedStoreSettings();
   const [period, setPeriod] = useState<'daily' | '7' | '30'>('daily');
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [includeExpenses, setIncludeExpenses] = useState(true);
@@ -78,11 +80,35 @@ export default function Laporan() {
     [dateRange.start.getTime(), dateRange.end.getTime()],
   );
 
-  const expenseCategories = useLiveQuery(() =>
-    db.expenseCategories.where('isDeleted').equals(0).toArray(),
-  );
+  const [expenseCategories, setExpenseCategories] = useState<SupabaseExpenseCategory[] | undefined>(undefined);
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
 
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
+  useEffect(() => {
+    let active = true;
+    const loadExpenseCategories = async () => {
+      const { data, error } = await supabase.from('expense_categories').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setExpenseCategories(data.map(mapExpenseCategoryRow));
+      if (error) console.error('Gagal memuat kategori pengeluaran:', error);
+    };
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    loadExpenseCategories();
+    loadPaymentMethods();
+
+    const channel = supabase
+      .channel('reports-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, loadExpenseCategories)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   if (!can('view_reports')) {
     return <LockedPage title={t('locked.title')} permissionLabel={t('locked.permissionLabel')} />;

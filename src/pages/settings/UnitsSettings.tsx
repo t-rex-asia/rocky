@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Unit } from '@/lib/db';
-import { useState } from 'react';
+import { supabase, mapUnitRow, unitToRow, type SupabaseUnit } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
 import { Ruler, Plus, Trash2, Edit2, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,13 +13,37 @@ import { useTranslation } from 'react-i18next';
 
 export default function UnitsSettings() {
   const { t } = useTranslation('settings');
-  const units = useLiveQuery(() => db.units.where('isDeleted').equals(0).toArray());
+  const [units, setUnits] = useState<SupabaseUnit[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('units')
+        .select('*')
+        .eq('is_deleted', 0)
+        .order('name');
+      if (active && !error && data) setUnits(data.map(mapUnitRow));
+      if (error) console.error('Gagal memuat satuan:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('units-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'units' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const [unitDialog, setUnitDialog] = useState(false);
   const [unitName, setUnitName] = useState('');
   const [unitEditId, setUnitEditId] = useState<number | null>(null);
   const [unitOriginalName, setUnitOriginalName] = useState('');
-  const [unitDeleteTarget, setUnitDeleteTarget] = useState<Unit | null>(null);
+  const [unitDeleteTarget, setUnitDeleteTarget] = useState<SupabaseUnit | null>(null);
   const [unitDeleteUsage, setUnitDeleteUsage] = useState(0);
 
   const openUnitAdd = () => {
@@ -29,8 +52,8 @@ export default function UnitsSettings() {
     setUnitOriginalName('');
     setUnitDialog(true);
   };
-  const openUnitEdit = (u: Unit) => {
-    setUnitEditId(u.id!);
+  const openUnitEdit = (u: SupabaseUnit) => {
+    setUnitEditId(u.id);
     setUnitName(u.name);
     setUnitOriginalName(u.name);
     setUnitDialog(true);
@@ -39,11 +62,12 @@ export default function UnitsSettings() {
     const name = unitName.trim();
     if (!name) return;
 
-    // Uniqueness check (active units only — soft-deleted records still occupy &name index,
-    // but we want to surface a clearer message on conflict)
-    const existing = await db.units.where('name').equals(name).first();
+    // Uniqueness check (active units only — soft-deleted records still occupy the
+    // unique index, but we want to surface a clearer message on conflict)
+    const { data: existing } = await supabase.from('units').select('*').eq('name', name).maybeSingle();
     if (existing && existing.id !== unitEditId) {
-      if (existing.isDeleted === 1) {
+      const existingUnit = mapUnitRow(existing);
+      if (existingUnit.isDeleted === 1) {
         toast.error(t('units.toast.wasDeleted', { name }));
       } else {
         toast.error(t('units.toast.duplicate', { name }));
@@ -53,19 +77,15 @@ export default function UnitsSettings() {
 
     try {
       if (unitEditId) {
-        await db.units.update(unitEditId, { name });
+        const { error } = await supabase.from('units').update(unitToRow({ name })).eq('id', unitEditId);
+        if (error) throw error;
         // Cascade rename to all products using the old name so the dropdown stays consistent
         if (unitOriginalName && unitOriginalName !== name) {
-          await db.products.where('unit').equals(unitOriginalName).modify({ unit: name, updatedAt: new Date() });
+          await supabase.from('products').update({ unit: name, updated_at: new Date().toISOString() }).eq('unit', unitOriginalName);
         }
       } else {
-        await db.units.add({
-          name,
-          isDefault: 0,
-          createdAt: new Date(),
-          isDeleted: 0,
-          deletedAt: null,
-        });
+        const { error } = await supabase.from('units').insert(unitToRow({ name, isDefault: 0, isDeleted: 0, deletedAt: null }));
+        if (error) throw error;
       }
       setUnitDialog(false);
       toast.success(t('units.toast.saved'));
@@ -73,14 +93,18 @@ export default function UnitsSettings() {
       toast.error(t('units.toast.saveFailed'));
     }
   };
-  const requestDeleteUnit = async (u: Unit) => {
-    const usage = await db.products.where('unit').equals(u.name).filter(p => p.isDeleted === 0).count();
-    setUnitDeleteUsage(usage);
+  const requestDeleteUnit = async (u: SupabaseUnit) => {
+    const { count } = await supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('unit', u.name)
+      .eq('is_deleted', 0);
+    setUnitDeleteUsage(count ?? 0);
     setUnitDeleteTarget(u);
   };
   const confirmDeleteUnit = async () => {
     if (!unitDeleteTarget?.id) return;
-    await db.units.update(unitDeleteTarget.id, { isDeleted: 1, deletedAt: new Date() });
+    await supabase.from('units').update(unitToRow({ isDeleted: 1, deletedAt: new Date().toISOString() })).eq('id', unitDeleteTarget.id);
     setUnitDeleteTarget(null);
     toast.success(t('units.toast.deleted'));
   };

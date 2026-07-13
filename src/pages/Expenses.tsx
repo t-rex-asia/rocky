@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Expense, type ExpenseCategory } from '@/lib/db';
-import { useState, useMemo } from 'react';
+import { db, type Expense } from '@/lib/db';
+import { supabase, mapExpenseCategoryRow, mapPaymentMethodRow, type SupabaseExpenseCategory, type SupabasePaymentMethod } from '@/lib/supabase';
+import { useState, useMemo, useEffect } from 'react';
 import { Wallet, Plus, ChevronLeft, Edit2, Trash2, Calendar, Receipt, FilterX } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -110,10 +111,35 @@ export default function ExpensesPage() {
     return all.filter((e) => e.isDeleted === 0).sort((a, b) => +new Date(b.date) - +new Date(a.date));
   }, [range]);
 
-  const categories = useLiveQuery(() =>
-    db.expenseCategories.where('isDeleted').equals(0).toArray(),
-  );
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
+  const [categories, setCategories] = useState<SupabaseExpenseCategory[] | undefined>(undefined);
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadCategories = async () => {
+      const { data, error } = await supabase.from('expense_categories').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setCategories(data.map(mapExpenseCategoryRow));
+      if (error) console.error('Gagal memuat kategori pengeluaran:', error);
+    };
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    loadCategories();
+    loadPaymentMethods();
+
+    const channel = supabase
+      .channel('expenses-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, loadCategories)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const canManage = can('manage_expenses');
   const canView = can('view_expenses') || canManage;
@@ -129,7 +155,7 @@ export default function ExpensesPage() {
     [filtered],
   );
 
-  const getCategory = (id: number): ExpenseCategory | undefined =>
+  const getCategory = (id: number): SupabaseExpenseCategory | undefined =>
     categories?.find((c) => c.id === id);
   const getPaymentName = (id: number): string =>
     paymentMethods?.find((p) => p.id === id)?.name ?? '-';

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { format } from 'date-fns';
 import { id, enUS, ms } from 'date-fns/locale';
@@ -7,6 +7,7 @@ import { ArrowLeft, Banknote, CalendarIcon, CheckCircle2, ChevronRight, CreditCa
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { db, type Debt } from '@/lib/db';
+import { supabase, mapPaymentMethodRow, type SupabasePaymentMethod } from '@/lib/supabase';
 import { useAuth } from '@/hooks/use-auth';
 import LockedPage from '@/components/LockedPage';
 import { Badge } from '@/components/ui/badge';
@@ -48,7 +49,27 @@ export default function DebtsPage() {
   const debts = useLiveQuery(() => db.debts.orderBy('createdAt').reverse().toArray());
   const payments = useLiveQuery(() => db.debtPayments.orderBy('date').reverse().toArray());
   const transactions = useLiveQuery(() => db.transactions.toArray());
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    loadPaymentMethods();
+
+    const channel = supabase
+      .channel('debts-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const txById = useMemo(
     () => new Map((transactions ?? []).map((tx) => [tx.id, tx])),

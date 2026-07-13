@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react';
-import { Loader2, Cloud } from 'lucide-react';
+import { Loader2, Cloud, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSupabaseAuth } from '@/hooks/use-supabase-auth';
+import { isSupabaseConfigured } from '@/lib/supabase';
 
 /**
  * Membungkus halaman yang datanya sudah dipindah ke Supabase (data bersama
@@ -16,6 +17,18 @@ export default function SupabaseLoginGate({ children }: { children: ReactNode })
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+        <AlertTriangle className="w-8 h-8 text-destructive mb-3" />
+        <h2 className="text-base font-bold mb-1">Konfigurasi Supabase Belum Lengkap</h2>
+        <p className="text-xs text-muted-foreground max-w-xs">
+          Env var VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY belum terpasang saat build. Cek pengaturan deploy lalu build ulang.
+        </p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

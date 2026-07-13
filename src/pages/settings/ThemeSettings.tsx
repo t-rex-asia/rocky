@@ -1,19 +1,18 @@
 import { useTranslation } from 'react-i18next';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
 import { Palette, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import ThemeColorPicker from '@/components/ThemeColorPicker';
 import { setThemeColor } from '@/hooks/use-theme-color';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 import { useAuth } from '@/hooks/use-auth';
 import LockedPage from '@/components/LockedPage';
 
 export default function ThemeSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const { settings } = useStoreSettings();
 
   if (!can('manage_store_settings')) {
     return <LockedPage title={t('masterData.theme.title')} permissionLabel={t('masterData.theme.permissionLabel')} />;
@@ -34,7 +33,7 @@ export default function ThemeSettings() {
       <Card className="border-0 shadow-sm">
         <CardContent className="p-4">
           <ThemeColorPicker
-            value={storeSettings?.themeColor ?? '215'}
+            value={settings?.themeColor ?? '215'}
             onChange={hue => setThemeColor(hue)}
           />
         </CardContent>

@@ -13,6 +13,8 @@ import { AuthProvider } from "@/hooks/use-auth";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import { CloudAuthProvider } from "@/hooks/use-cloud-auth";
 import { SupabaseAuthProvider } from "@/hooks/use-supabase-auth";
+import { StoreSettingsProvider } from "@/hooks/use-store-settings";
+import SupabaseLoginGate from "@/components/SupabaseLoginGate";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import AnalyticsTracker from "@/components/AnalyticsTracker";
 import { I18nextProvider } from "react-i18next";
@@ -96,6 +98,8 @@ const App = () => {
                <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
                 <CloudAuthProvider>
                 <SupabaseAuthProvider>
+                <SupabaseLoginGate>
+                <StoreSettingsProvider>
                 <AnalyticsTracker />
               <Routes>
                 <Route element={<AppLayout />}>
@@ -326,6 +330,8 @@ const App = () => {
                 </Route>
                 <Route path="*" element={<NotFound />} />
               </Routes>
+              </StoreSettingsProvider>
+              </SupabaseLoginGate>
               </SupabaseAuthProvider>
               </CloudAuthProvider>
              </GoogleOAuthProvider>

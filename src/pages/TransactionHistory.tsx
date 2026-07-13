@@ -1,5 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Transaction, type TransactionItemRecord } from '@/lib/db';
+import { supabase, mapProductRow, productToRow, mapPaymentMethodRow, type SupabasePaymentMethod } from '@/lib/supabase';
+import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useEffect } from 'react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { id as idLocale, enUS, ms } from 'date-fns/locale';
@@ -61,8 +63,29 @@ export default function TransactionHistory() {
 
   const getTxItems = (txId: number | undefined): TransactionItemRecord[] =>
     txId ? (txItemsMap?.[txId] ?? []) : [];
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    loadPaymentMethods();
+
+    const channel = supabase
+      .channel('transaction-history-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const storeSettings = useMergedStoreSettings();
   const users = useLiveQuery(() => db.users.toArray());
   const debts = useLiveQuery(() => db.debts.toArray());
 
@@ -162,9 +185,10 @@ export default function TransactionHistory() {
       if (restoreStock) {
         const items = getTxItems(selectedTx.id);
         for (const item of items) {
-          const product = await db.products.get(item.productId);
-          if (product) {
-            await db.products.update(item.productId, { stock: product.stock + item.quantity });
+          const { data: productRow } = await supabase.from('products').select('*').eq('id', item.productId).maybeSingle();
+          if (productRow) {
+            const product = mapProductRow(productRow);
+            await supabase.from('products').update(productToRow({ stock: product.stock + item.quantity })).eq('id', item.productId);
           }
         }
       }

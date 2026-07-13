@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type PaymentMethod } from '@/lib/db';
-import { useState } from 'react';
+import { supabase, mapPaymentMethodRow, paymentMethodToRow, type SupabasePaymentMethod } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
 import { CreditCard, Plus, Trash2, Edit2, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,7 +15,27 @@ import { useTranslation } from 'react-i18next';
 export default function PaymentMethodsSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('payment-methods-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const [pmDialog, setPmDialog] = useState(false);
   const [pmName, setPmName] = useState('');
@@ -33,15 +52,27 @@ export default function PaymentMethodsSettings() {
   }
 
   const openPmAdd = () => { setPmEditId(null); setPmName(''); setPmCategory('tunai'); setPmDialog(true); };
-  const openPmEdit = (pm: PaymentMethod) => { setPmEditId(pm.id!); setPmName(pm.name); setPmCategory(pm.category); setPmDialog(true); };
+  const openPmEdit = (pm: SupabasePaymentMethod) => { setPmEditId(pm.id); setPmName(pm.name); setPmCategory(pm.category); setPmDialog(true); };
   const savePm = async () => {
     if (!pmName.trim()) return;
-    if (pmEditId) await db.paymentMethods.update(pmEditId, { name: pmName.trim(), category: pmCategory });
-    else await db.paymentMethods.add({ name: pmName.trim(), category: pmCategory, isDefault: false, createdAt: new Date() });
+    const { error } = pmEditId
+      ? await supabase.from('payment_methods').update(paymentMethodToRow({ name: pmName.trim(), category: pmCategory })).eq('id', pmEditId)
+      : await supabase.from('payment_methods').insert(paymentMethodToRow({ name: pmName.trim(), category: pmCategory, isDefault: false }));
+    if (error) {
+      toast.error(t('paymentMethod.toast.saveFailed', { defaultValue: 'Gagal menyimpan metode pembayaran' }));
+      return;
+    }
     setPmDialog(false);
     toast.success(t('paymentMethod.toast.saved'));
   };
-  const deletePm = async (id: number) => { await db.paymentMethods.delete(id); toast.success(t('paymentMethod.toast.deleted')); };
+  const deletePm = async (id: number) => {
+    const { error } = await supabase.from('payment_methods').delete().eq('id', id);
+    if (error) {
+      toast.error(t('paymentMethod.toast.deleteFailed', { defaultValue: 'Gagal menghapus metode pembayaran' }));
+      return;
+    }
+    toast.success(t('paymentMethod.toast.deleted'));
+  };
 
   return (
     <div className="px-4 pt-6 pb-4 space-y-4">

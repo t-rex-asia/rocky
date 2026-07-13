@@ -11,6 +11,8 @@ import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '@/i18n';
 import { restoreFromBackupData } from '@/lib/backup';
 import { downloadBackup, listBackups, type CloudBackup } from '@/lib/cloud-api';
 import { db } from '@/lib/db';
+import { useStoreSettings } from '@/hooks/use-store-settings';
+import { supabase, categoryToRow, unitToRow, productToRow, supplierToRow } from '@/lib/supabase';
 import { nativeGoogleSignIn } from '@/lib/google-auth';
 import { isNativePlatform } from '@/lib/printer';
 import { cn } from '@/lib/utils';
@@ -29,6 +31,7 @@ interface OnboardingProps {
 export default function Onboarding({ onComplete }: OnboardingProps) {
   const { t, i18n } = useTranslation('onboarding');
   const isNative = useMemo(() => isNativePlatform(), []);
+  const { updateSettings } = useStoreSettings();
 
   const tutorialSlides = useMemo(() => [
     {
@@ -102,54 +105,61 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
   const isStoreStep = step === tutorialSlides.length + (hasInstallStep ? 1 : 0);
   const tutorialIndex = step;
 
+  // Kategori/produk/supplier/satuan sekarang data bersama di Supabase (bukan
+  // Dexie lagi), jadi contoh data ditulis ke sana supaya langsung muncul di
+  // halaman Produk/Kasir. Transaksi contoh tetap di Dexie (belum dimigrasikan).
   const seedDummyData = async () => {
-    const now = new Date();
+    const ensureCategory = async (name: string, color: string, icon: string): Promise<number> => {
+      const { data: existing } = await supabase.from('categories').select('id').eq('name', name).maybeSingle();
+      if (existing) return existing.id as number;
+      const { data: created } = await supabase.from('categories').insert(categoryToRow({ name, color, icon, isDeleted: 0, deletedAt: null })).select('id').single();
+      return created!.id as number;
+    };
+
+    const makananId = await ensureCategory('Makanan', '#FF6B35', '🍕');
+    const minumanId = await ensureCategory('Minuman', '#4ECDC4', '🥤');
+    const lainnyaId = await ensureCategory('Lainnya', '#95A5A6', '📦');
+
     const dummyProducts = [
-      { name: 'Nasi Goreng Spesial', sku: 'NG001', categoryId: 1, price: 15000, hpp: 8000, stock: 50, unit: 'porsi', description: 'Nasi goreng dengan telur mata sapi, ayam suwir, dan kerupuk', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Mie Goreng', sku: 'MG001', categoryId: 1, price: 12000, hpp: 6000, stock: 40, unit: 'porsi', description: 'Mie goreng dengan sayur dan telur', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Ayam Bakar', sku: 'AB001', categoryId: 1, price: 20000, hpp: 12000, stock: 30, unit: 'porsi', description: 'Ayam bakar bumbu kecap, sambal, dan lalapan', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Sate Ayam (10 tusuk)', sku: 'SA001', categoryId: 1, price: 18000, hpp: 10000, stock: 25, unit: 'porsi', description: 'Isi 10 tusuk + bumbu kacang + lontong', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Bakso Urat', sku: 'BU001', categoryId: 1, price: 15000, hpp: 7000, stock: 35, unit: 'mangkok', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Es Teh Manis', sku: 'ET001', categoryId: 2, price: 5000, hpp: 1500, stock: 100, unit: 'gelas', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Es Jeruk', sku: 'EJ001', categoryId: 2, price: 7000, hpp: 2500, stock: 80, unit: 'gelas', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Kopi Susu', sku: 'KS001', categoryId: 2, price: 10000, hpp: 4000, stock: 60, unit: 'gelas', description: 'Kopi susu gula aren', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Air Mineral', sku: 'AM001', categoryId: 2, price: 4000, hpp: 2000, stock: 120, unit: 'botol', description: '600ml', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Tisu', sku: 'TS001', categoryId: 3, price: 2000, hpp: 1000, stock: 200, unit: 'pcs', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'Kerupuk', sku: 'KR001', categoryId: 3, price: 3000, hpp: 1500, stock: 150, unit: 'bungkus', createdAt: now, updatedAt: now, isDeleted: 0, deletedAt: null },
+      { name: 'Nasi Goreng Spesial', sku: 'NG001', categoryId: makananId, price: 15000, hpp: 8000, stock: 50, unit: 'porsi', description: 'Nasi goreng dengan telur mata sapi, ayam suwir, dan kerupuk' },
+      { name: 'Mie Goreng', sku: 'MG001', categoryId: makananId, price: 12000, hpp: 6000, stock: 40, unit: 'porsi', description: 'Mie goreng dengan sayur dan telur' },
+      { name: 'Ayam Bakar', sku: 'AB001', categoryId: makananId, price: 20000, hpp: 12000, stock: 30, unit: 'porsi', description: 'Ayam bakar bumbu kecap, sambal, dan lalapan' },
+      { name: 'Sate Ayam (10 tusuk)', sku: 'SA001', categoryId: makananId, price: 18000, hpp: 10000, stock: 25, unit: 'porsi', description: 'Isi 10 tusuk + bumbu kacang + lontong' },
+      { name: 'Bakso Urat', sku: 'BU001', categoryId: makananId, price: 15000, hpp: 7000, stock: 35, unit: 'mangkok' },
+      { name: 'Es Teh Manis', sku: 'ET001', categoryId: minumanId, price: 5000, hpp: 1500, stock: 100, unit: 'gelas' },
+      { name: 'Es Jeruk', sku: 'EJ001', categoryId: minumanId, price: 7000, hpp: 2500, stock: 80, unit: 'gelas' },
+      { name: 'Kopi Susu', sku: 'KS001', categoryId: minumanId, price: 10000, hpp: 4000, stock: 60, unit: 'gelas', description: 'Kopi susu gula aren' },
+      { name: 'Air Mineral', sku: 'AM001', categoryId: minumanId, price: 4000, hpp: 2000, stock: 120, unit: 'botol', description: '600ml' },
+      { name: 'Tisu', sku: 'TS001', categoryId: lainnyaId, price: 2000, hpp: 1000, stock: 200, unit: 'pcs' },
+      { name: 'Kerupuk', sku: 'KR001', categoryId: lainnyaId, price: 3000, hpp: 1500, stock: 150, unit: 'bungkus' },
     ];
 
     const dummySuppliers = [
-      { name: 'PT Bahan Segar', phone: '08111222333', address: 'Jl. Pasar Baru No. 15', notes: 'Supplier sayur & daging', createdAt: now, isDeleted: 0, deletedAt: null },
-      { name: 'UD Minuman Jaya', phone: '08222333444', address: 'Jl. Raya Industri No. 8', notes: 'Supplier minuman', createdAt: now, isDeleted: 0, deletedAt: null },
+      { name: 'PT Bahan Segar', phone: '08111222333', address: 'Jl. Pasar Baru No. 15', notes: 'Supplier sayur & daging' },
+      { name: 'UD Minuman Jaya', phone: '08222333444', address: 'Jl. Raya Industri No. 8', notes: 'Supplier minuman' },
     ];
 
     // Ensure all units used by sample products exist in master units table.
-    // seedDefaultData() already adds the 9 default units; here we only add
-    // the extras that the sample data uses (e.g. 'mangkok', 'gelas').
     const sampleUnits = Array.from(new Set(dummyProducts.map(p => p.unit).filter(Boolean)));
-    const existingUnits = await db.units.toArray();
-    const existingNames = new Set(existingUnits.map(u => u.name));
-    const unitNow = new Date();
+    const { data: existingUnitRows } = await supabase.from('units').select('name');
+    const existingNames = new Set((existingUnitRows ?? []).map(u => u.name as string));
     for (const u of sampleUnits) {
       if (existingNames.has(u)) continue;
-      try {
-        await db.units.add({
-          name: u,
-          isDefault: 1,
-          createdAt: unitNow,
-          isDeleted: 0,
-          deletedAt: null,
-        });
-        existingNames.add(u);
-      } catch {
-        // unique-constraint race: ignore
-      }
+      await supabase.from('units').insert(unitToRow({ name: u, isDefault: 1, isDeleted: 0, deletedAt: null }));
+      existingNames.add(u);
     }
 
-    await db.products.bulkAdd(dummyProducts);
-    await db.suppliers.bulkAdd(dummySuppliers);
+    const { data: insertedProducts } = await supabase
+      .from('products')
+      .insert(dummyProducts.map(p => productToRow({ ...p, isCustomPrice: false, trackStock: true, isDeleted: 0, deletedAt: null })))
+      .select('id, sku, name, price, hpp');
+    const productBySku = new Map((insertedProducts ?? []).map(p => [p.sku as string, p]));
 
+    await supabase.from('suppliers').insert(dummySuppliers.map(s => supplierToRow({ ...s, isDeleted: 0, deletedAt: null })));
+
+    const now = new Date();
     const discNull: 'percentage' | 'nominal' | null = null;
+    const p = (sku: string) => productBySku.get(sku)!;
 
     const tx1Id = await db.transactions.add({
       subtotal: 40000, discountType: discNull, discountValue: 0, discountAmount: 0, total: 40000,
@@ -157,8 +167,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       date: new Date(now.getTime() - 3600000), receiptNumber: 'TX-DEMO-001',
     });
     await db.transactionItems.bulkAdd([
-      { transactionId: tx1Id as number, productId: 1, productName: 'Nasi Goreng Spesial', quantity: 2, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 30000 },
-      { transactionId: tx1Id as number, productId: 6, productName: 'Es Teh Manis', quantity: 2, price: 5000, hpp: 1500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
+      { transactionId: tx1Id as number, productId: p('NG001').id, productName: p('NG001').name, quantity: 2, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 30000 },
+      { transactionId: tx1Id as number, productId: p('ET001').id, productName: p('ET001').name, quantity: 2, price: 5000, hpp: 1500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
     ]);
 
     const tx2Id = await db.transactions.add({
@@ -167,8 +177,8 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       date: new Date(now.getTime() - 1800000), receiptNumber: 'TX-DEMO-002',
     });
     await db.transactionItems.bulkAdd([
-      { transactionId: tx2Id as number, productId: 3, productName: 'Ayam Bakar', quantity: 1, price: 20000, hpp: 12000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 20000 },
-      { transactionId: tx2Id as number, productId: 8, productName: 'Kopi Susu', quantity: 1, price: 10000, hpp: 4000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
+      { transactionId: tx2Id as number, productId: p('AB001').id, productName: p('AB001').name, quantity: 1, price: 20000, hpp: 12000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 20000 },
+      { transactionId: tx2Id as number, productId: p('KS001').id, productName: p('KS001').name, quantity: 1, price: 10000, hpp: 4000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
     ]);
 
     const tx3Id = await db.transactions.add({
@@ -177,9 +187,9 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
       date: new Date(now.getTime() - 900000), receiptNumber: 'TX-DEMO-003',
     });
     await db.transactionItems.bulkAdd([
-      { transactionId: tx3Id as number, productId: 1, productName: 'Nasi Goreng Spesial', quantity: 1, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 15000 },
-      { transactionId: tx3Id as number, productId: 4, productName: 'Sate Ayam (10 tusuk)', quantity: 1, price: 18000, hpp: 10000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 18000 },
-      { transactionId: tx3Id as number, productId: 7, productName: 'Es Jeruk', quantity: 1, price: 7000, hpp: 2500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 7000 },
+      { transactionId: tx3Id as number, productId: p('NG001').id, productName: p('NG001').name, quantity: 1, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 15000 },
+      { transactionId: tx3Id as number, productId: p('SA001').id, productName: p('SA001').name, quantity: 1, price: 18000, hpp: 10000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 18000 },
+      { transactionId: tx3Id as number, productId: p('EJ001').id, productName: p('EJ001').name, quantity: 1, price: 7000, hpp: 2500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 7000 },
     ]);
   };
 
@@ -208,21 +218,7 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
   // Tutup wizard onboarding setelah restore berhasil (paksa onboardingDone).
   const finishAfterRestore = async (successMsg: string) => {
-    const s = await db.storeSettings.toCollection().first();
-    if (s?.id) {
-      await db.storeSettings.update(s.id, { onboardingDone: true });
-    } else {
-      await db.storeSettings.add({
-        storeName: 'Toko Saya',
-        address: '',
-        phone: '',
-        receiptFooter: 'Terima kasih atas Kepercayaan Anda🙏🏿🙏🏿🙏🏿',
-        printLogo: false,
-        onboardingDone: true,
-        lastBackupAt: null,
-        deviceId: crypto.randomUUID(),
-      });
-    }
+    await updateSettings({ onboardingDone: true });
     await markAllFeaturesSeen();
     toast.success(successMsg);
     onComplete();
@@ -273,27 +269,13 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
     if (!storeName.trim()) return;
     setSaving(true);
     try {
-      const existing = await db.storeSettings.toCollection().first();
-      if (existing?.id) {
-        await db.storeSettings.update(existing.id, {
-          storeName: storeName.trim(),
-          address: address.trim(),
-          phone: phone.trim(),
-          onboardingDone: true,
-          themeColor,
-        });
-      } else {
-        await db.storeSettings.add({
-          storeName: storeName.trim(),
-          address: address.trim(),
-          phone: phone.trim(),
-          receiptFooter: 'Terima kasih atas kunjungan Anda!',
-          printLogo: false,
-          onboardingDone: true,
-          lastBackupAt: null,
-          themeColor,
-        });
-      }
+      await updateSettings({
+        storeName: storeName.trim(),
+        address: address.trim(),
+        phone: phone.trim(),
+        onboardingDone: true,
+        themeColor,
+      });
 
       if (loadDummy) {
         await seedDummyData();

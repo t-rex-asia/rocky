@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
+import { supabase, storeSettingsToRow } from '@/lib/supabase';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 
 // Predefined theme color options with HSL values
 export const THEME_COLORS = [
@@ -30,21 +30,18 @@ export function applyThemeColor(hue: string) {
 }
 
 export function useThemeColor() {
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const { settings } = useStoreSettings();
 
   useEffect(() => {
-    if (storeSettings?.themeColor) {
-      applyThemeColor(storeSettings.themeColor);
+    if (settings?.themeColor) {
+      applyThemeColor(settings.themeColor);
     }
-  }, [storeSettings?.themeColor]);
+  }, [settings?.themeColor]);
 
-  return storeSettings?.themeColor ?? '215';
+  return settings?.themeColor ?? '215';
 }
 
 export async function setThemeColor(hue: string) {
-  const settings = await db.storeSettings.toCollection().first();
-  if (settings?.id) {
-    await db.storeSettings.update(settings.id, { themeColor: hue });
-  }
+  await supabase.from('store_settings').update(storeSettingsToRow({ themeColor: hue })).eq('id', 1);
   applyThemeColor(hue);
 }

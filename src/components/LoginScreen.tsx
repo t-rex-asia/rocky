@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Lock, User as UserIcon, Eye, EyeOff, Store, LogIn } from 'lucide-react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { useTranslation } from 'react-i18next';
-import { db } from '@/lib/db';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,7 +11,7 @@ import { toast } from 'sonner';
 export default function LoginScreen() {
   const { t } = useTranslation('settings');
   const { login } = useAuth();
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const { settings: storeSettings } = useStoreSettings();
 
   const [username, setUsername] = useState('');
   const [pin, setPin] = useState('');

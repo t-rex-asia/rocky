@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, isStockManaged } from '@/lib/db';
-import { useState } from 'react';
+import { supabase, mapProductRow, mapSupplierRow, productToRow, type SupabaseProduct, type SupabaseSupplier } from '@/lib/supabase';
+import { useState, useEffect } from 'react';
 import { ArrowDownToLine, Plus, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -39,8 +40,35 @@ export default function StockInPage() {
   const [filterSupplier, setFilterSupplier] = useState('all');
 
   const stockIns = useLiveQuery(() => db.stockIns.orderBy('date').reverse().toArray());
-  const products = useLiveQuery(() => db.products.where('isDeleted').equals(0).toArray());
-  const suppliers = useLiveQuery(() => db.suppliers.where('isDeleted').equals(0).toArray());
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [suppliers, setSuppliers] = useState<SupabaseSupplier[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setProducts(data.map(mapProductRow));
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    const loadSuppliers = async () => {
+      const { data, error } = await supabase.from('suppliers').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setSuppliers(data.map(mapSupplierRow));
+      if (error) console.error('Gagal memuat supplier:', error);
+    };
+    loadProducts();
+    loadSuppliers();
+
+    const channel = supabase
+      .channel('stock-in-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'suppliers' }, loadSuppliers)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   if (!can('manage_stock_inout')) {
     return <LockedPage title={t('stockIn.locked.title')} permissionLabel={t('stockIn.locked.permissionLabel')} />;
@@ -93,11 +121,10 @@ export default function StockInPage() {
       date: new Date(),
     });
 
-    await db.products.update(product.id!, {
+    await supabase.from('products').update(productToRow({
       stock: newStock,
       hpp: Math.round(newHpp),
-      updatedAt: new Date(),
-    });
+    })).eq('id', product.id);
 
     toast.success(t('stockIn.toast.success', { product: product.name, qty, hpp: Math.round(newHpp).toLocaleString(numberLocale) }));
     setDialogOpen(false);

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { User, Check, Plus, Phone } from 'lucide-react';
-import { db, type Customer } from '@/lib/db';
+import { supabase, customerToRow, type SupabaseCustomer } from '@/lib/supabase';
 import { Input } from '@/components/ui/input';
 import { trackEvent } from '@/lib/analytics';
 import { toast } from 'sonner';
@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { useTranslation } from 'react-i18next';
 
 interface CustomerPickerProps {
-  customers: Customer[];
+  customers: SupabaseCustomer[];
   value: string;          // customerName (snapshot/free text)
   customerId?: number;    // selected master id, if any
   onChange: (name: string, id?: number) => void;
@@ -30,7 +30,7 @@ export default function CustomerPicker({ customers, value, customerId, onChange,
   const savePhone = async (newPhone: string) => {
     setPhone(newPhone);
     if (customerId != null) {
-      await db.customers.update(customerId, { phone: newPhone.trim() });
+      await supabase.from('customers').update(customerToRow({ phone: newPhone.trim() })).eq('id', customerId);
     }
   };
 
@@ -55,7 +55,7 @@ export default function CustomerPicker({ customers, value, customerId, onChange,
   const exactMatch = customers.some(c => c.name.trim().toLowerCase() === query);
   const canQuickCreate = query.length > 0 && !exactMatch;
 
-  const selectCustomer = (c: Customer) => {
+  const selectCustomer = (c: SupabaseCustomer) => {
     onChange(c.name, c.id);
     setOpen(false);
   };
@@ -70,18 +70,14 @@ export default function CustomerPicker({ customers, value, customerId, onChange,
     if (!name || creating) return;
     setCreating(true);
     try {
-      const id = await db.customers.add({
-        name,
-        phone: '',
-        email: '',
-        address: '',
-        notes: '',
-        createdAt: new Date(),
-        isDeleted: 0,
-        deletedAt: null,
-      });
+      const { data, error } = await supabase
+        .from('customers')
+        .insert(customerToRow({ name, phone: '', email: '', address: '', notes: '', isDeleted: 0, deletedAt: null }))
+        .select('id')
+        .single();
+      if (error || !data) throw error;
       trackEvent('create_customer');
-      onChange(name, id as number);
+      onChange(name, data.id as number);
       toast.success(t('customerPicker.toastAdded', { name }));
       setOpen(false);
     } catch {

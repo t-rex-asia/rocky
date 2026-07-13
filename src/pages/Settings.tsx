@@ -1,6 +1,8 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
-import { useState, useRef } from 'react';
+import { supabase } from '@/lib/supabase';
+import { useStoreSettings } from '@/hooks/use-store-settings';
+import { useState, useRef, useEffect } from 'react';
 import { Settings, Store, CreditCard, Tag, Download, Edit2, Truck, ArrowDownToLine, ArrowUpFromLine, ChevronRight, Receipt, Palette, Package, Camera, X, Ruler, Users as UsersIcon, ShieldCheck, LogOut, CheckCircle2, Globe, Wallet, HandCoins, ClipboardCheck, LayoutGrid, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Link } from 'react-router-dom';
@@ -23,15 +25,47 @@ import LanguageSwitcher from '@/components/LanguageSwitcher';
 export default function Pengaturan() {
   const { t } = useTranslation('settings');
   const isNative = isNativePlatform();
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
-  const categories = useLiveQuery(() => db.categories.where('isDeleted').equals(0).toArray());
+  const { settings, updateSettings } = useStoreSettings();
+  // deviceId adalah field lokal per-device (belum dan tidak akan dimigrasikan)
+  const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
   const usersCount = useLiveQuery(() => db.users.count());
-  const units = useLiveQuery(() => db.units.where('isDeleted').equals(0).toArray());
-  const expenseCategories = useLiveQuery(() =>
-    db.expenseCategories.where('isDeleted').equals(0).toArray(),
-  );
   const activeDebts = useLiveQuery(() => db.debts.where('status').anyOf('unpaid', 'partial').toArray());
+
+  const [paymentMethodsCount, setPaymentMethodsCount] = useState(0);
+  const [categoriesCount, setCategoriesCount] = useState(0);
+  const [unitsCount, setUnitsCount] = useState(0);
+  const [expenseCategoriesCount, setExpenseCategoriesCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const loadCounts = async () => {
+      const [pm, cat, un, ec] = await Promise.all([
+        supabase.from('payment_methods').select('id', { count: 'exact', head: true }),
+        supabase.from('categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
+        supabase.from('units').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
+        supabase.from('expense_categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
+      ]);
+      if (!active) return;
+      setPaymentMethodsCount(pm.count ?? 0);
+      setCategoriesCount(cat.count ?? 0);
+      setUnitsCount(un.count ?? 0);
+      setExpenseCategoriesCount(ec.count ?? 0);
+    };
+    loadCounts();
+
+    const channel = supabase
+      .channel('settings-counts-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadCounts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCounts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'units' }, loadCounts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, loadCounts)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const { multiUserEnabled, currentUser, isOwner, can, logout } = useAuth();
 
@@ -103,8 +137,7 @@ export default function Pengaturan() {
   };
 
   const handleToggleDebt = async (enabled: boolean) => {
-    if (!storeSettings?.id) return;
-    await db.storeSettings.update(storeSettings.id, { allowDebt: enabled });
+    await updateSettings({ allowDebt: enabled });
     toast.success(enabled ? t('toast.debtEnabled') : t('toast.debtDisabled'));
   };
 
@@ -117,19 +150,17 @@ export default function Pengaturan() {
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   const openStoreEdit = () => {
-    setStoreName(storeSettings?.storeName ?? '');
-    setStoreAddr(storeSettings?.address ?? '');
-    setStorePhone(storeSettings?.phone ?? '');
-    setStoreLogo(storeSettings?.logo);
+    setStoreName(settings?.storeName ?? '');
+    setStoreAddr(settings?.address ?? '');
+    setStorePhone(settings?.phone ?? '');
+    setStoreLogo(settings?.logo ?? undefined);
     setStoreDialog(true);
   };
 
   const saveStore = async () => {
-    if (storeSettings?.id) {
-      await db.storeSettings.update(storeSettings.id, { storeName: storeName.trim(), address: storeAddr.trim(), phone: storePhone.trim(), logo: storeLogo || undefined });
-      toast.success(t('storeDialog.saveSuccess'));
-      setStoreDialog(false);
-    }
+    await updateSettings({ storeName: storeName.trim(), address: storeAddr.trim(), phone: storePhone.trim(), logo: storeLogo ?? null });
+    toast.success(t('storeDialog.saveSuccess'));
+    setStoreDialog(false);
   };
 
   const handleLogoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -159,7 +190,6 @@ export default function Pengaturan() {
   };
 
   const handleActivateMultiUser = async () => {
-    if (!storeSettings?.id) return;
     if (!actName.trim()) { toast.error(t('toast.nameRequired')); return; }
     if (!isValidUsername(actUsername)) {
       toast.error(t('toast.usernameInvalid'));
@@ -196,11 +226,11 @@ export default function Pengaturan() {
       }
 
       // Flip the flag
-      await db.storeSettings.update(storeSettings.id, { multiUserEnabled: true });
+      await updateSettings({ multiUserEnabled: true });
 
       // Persist session for the owner so they stay logged in immediately
-      if (ownerId && storeSettings.deviceId) {
-        saveSession(ownerId, storeSettings.deviceId);
+      if (ownerId && localSettings?.deviceId) {
+        saveSession(ownerId, localSettings.deviceId);
       }
 
       toast.success(t('toast.multiUserEnabled'));
@@ -213,8 +243,7 @@ export default function Pengaturan() {
   };
 
   const handleDisableMultiUser = async () => {
-    if (!storeSettings?.id) return;
-    await db.storeSettings.update(storeSettings.id, { multiUserEnabled: false });
+    await updateSettings({ multiUserEnabled: false });
     setDisableOpen(false);
     toast.success(t('toast.multiUserDisabled'));
     // Force reload so AuthProvider re-evaluates state.
@@ -242,15 +271,15 @@ export default function Pengaturan() {
       >
         <CardContent className="p-4 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center overflow-hidden shrink-0">
-            {storeSettings?.logo ? (
-              <img src={storeSettings.logo} alt={t('storeDialog.logoPreviewAlt')} className="w-full h-full object-cover" />
+            {settings?.logo ? (
+              <img src={settings.logo} alt={t('storeDialog.logoPreviewAlt')} className="w-full h-full object-cover" />
             ) : (
               <Store className="w-5 h-5" />
             )}
           </div>
           <div className="flex-1">
-            <p className="text-sm font-semibold">{storeSettings?.storeName || t('storeFallback')}</p>
-            <p className="text-xs text-muted-foreground">{storeSettings?.address || t('notSet')}</p>
+            <p className="text-sm font-semibold">{settings?.storeName || t('storeFallback')}</p>
+            <p className="text-xs text-muted-foreground">{settings?.address || t('notSet')}</p>
           </div>
           {can('manage_store_settings') && <Edit2 className="w-4 h-4 text-muted-foreground" />}
         </CardContent>
@@ -363,7 +392,7 @@ export default function Pengaturan() {
             </Card>
           </Link>
         )}
-        {can('manage_customers') && storeSettings?.allowDebt && (
+        {can('manage_customers') && settings?.allowDebt && (
           <Link to="/debts">
             <Card className="border-0 shadow-sm cursor-pointer hover:shadow-md transition-shadow mb-2">
               <CardContent className="p-3 flex items-center gap-3">
@@ -435,7 +464,7 @@ export default function Pengaturan() {
                 <p className="text-sm font-semibold">{t('masterData.allowDebt.title')}</p>
                 <p className="text-[10px] text-muted-foreground">{t('masterData.allowDebt.description')}</p>
               </div>
-              <Switch checked={storeSettings?.allowDebt ?? false} onCheckedChange={handleToggleDebt} />
+              <Switch checked={settings?.allowDebt ?? false} onCheckedChange={handleToggleDebt} />
             </CardContent>
           </Card>
         )}
@@ -445,7 +474,7 @@ export default function Pengaturan() {
             <Card className="border-0 shadow-sm cursor-pointer hover:shadow-md transition-shadow mb-2">
               <CardContent className="p-3 flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><CreditCard className="w-4 h-4" /></div>
-                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.paymentMethods.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.paymentMethods.description', { count: paymentMethods?.length ?? 0 })}</p></div>
+                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.paymentMethods.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.paymentMethods.description', { count: paymentMethodsCount })}</p></div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </CardContent>
             </Card>
@@ -457,7 +486,7 @@ export default function Pengaturan() {
             <Card className="border-0 shadow-sm cursor-pointer hover:shadow-md transition-shadow mb-2">
               <CardContent className="p-3 flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-accent/10 text-accent flex items-center justify-center"><Tag className="w-4 h-4" /></div>
-                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.productCategory.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.productCategory.description', { count: categories?.length ?? 0 })}</p></div>
+                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.productCategory.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.productCategory.description', { count: categoriesCount })}</p></div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </CardContent>
             </Card>
@@ -469,7 +498,7 @@ export default function Pengaturan() {
             <Card className="border-0 shadow-sm cursor-pointer hover:shadow-md transition-shadow mb-2">
               <CardContent className="p-3 flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-warning/10 text-warning flex items-center justify-center"><Wallet className="w-4 h-4" /></div>
-                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.expenseCategory.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.expenseCategory.description', { count: expenseCategories?.length ?? 0 })}</p></div>
+                <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.expenseCategory.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.expenseCategory.description', { count: expenseCategoriesCount })}</p></div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </CardContent>
             </Card>
@@ -480,7 +509,7 @@ export default function Pengaturan() {
           <Card className="border-0 shadow-sm cursor-pointer hover:shadow-md transition-shadow mb-2">
             <CardContent className="p-3 flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><Ruler className="w-4 h-4" /></div>
-              <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.units.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.units.description', { count: units?.length ?? 0 })}</p></div>
+              <div className="flex-1"><p className="text-sm font-semibold">{t('masterData.units.title')}</p><p className="text-[10px] text-muted-foreground">{t('masterData.units.description', { count: unitsCount })}</p></div>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
             </CardContent>
           </Card>

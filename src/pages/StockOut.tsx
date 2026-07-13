@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, isStockManaged } from '@/lib/db';
-import { useState, useMemo } from 'react';
+import { supabase, mapProductRow, productToRow, type SupabaseProduct } from '@/lib/supabase';
+import { useState, useMemo, useEffect } from 'react';
 import { ArrowUpFromLine, Plus, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -38,7 +39,27 @@ export default function StockOutPage() {
   const [notes, setNotes] = useState('');
 
   const stockOuts = useLiveQuery(() => db.stockOuts.orderBy('date').reverse().toArray());
-  const products = useLiveQuery(() => db.products.where('isDeleted').equals(0).toArray());
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setProducts(data.map(mapProductRow));
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    loadProducts();
+
+    const channel = supabase
+      .channel('stock-out-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const reasonMap = useMemo(() =>
     REASON_VALUES.map((value, i) => ({ value, label: t(`stockOut.reasons.${REASON_KEYS[i]}`) })),
@@ -80,10 +101,9 @@ export default function StockOutPage() {
       createdBy: currentUser?.id,
     });
 
-    await db.products.update(product.id!, {
+    await supabase.from('products').update(productToRow({
       stock: Math.round((product.stock - qty) * 1e6) / 1e6,
-      updatedAt: new Date(),
-    });
+    })).eq('id', product.id);
 
     toast.success(t('stockOut.toast.success', { product: product.name, qty }));
     setDialogOpen(false);

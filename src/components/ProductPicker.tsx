@@ -3,7 +3,7 @@ import { Search, ScanBarcode, Check, X, Package as PackageIcon } from 'lucide-re
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
-import type { Product } from '@/lib/db';
+import type { SupabaseProduct as Product } from '@/lib/supabase';
 import BarcodeScanner from '@/components/BarcodeScanner';
 import { useTranslation } from 'react-i18next';
 

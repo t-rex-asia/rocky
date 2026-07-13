@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Supplier } from '@/lib/db';
-import { useState } from 'react';
+import { supabase, mapSupplierRow, supplierToRow, type SupabaseSupplier } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
 import { Truck, Plus, Edit2, Trash2, Phone, MapPin, Search, ArrowLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,14 +25,38 @@ export default function SupplierPage() {
   const [search, setSearch] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [editSupplier, setEditSupplier] = useState<Supplier | null>(null);
+  const [editSupplier, setEditSupplier] = useState<SupabaseSupplier | null>(null);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
 
-  const suppliers = useLiveQuery(() => db.suppliers.where('isDeleted').equals(0).toArray());
+  const [suppliers, setSuppliers] = useState<SupabaseSupplier[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('suppliers')
+        .select('*')
+        .eq('is_deleted', 0)
+        .order('name');
+      if (active && !error && data) setSuppliers(data.map(mapSupplierRow));
+      if (error) console.error('Gagal memuat supplier:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('suppliers-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'suppliers' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   if (!can('manage_supplier')) {
     return <LockedPage title={t('supplier.locked.title')} permissionLabel={t('supplier.locked.permissionLabel')} />;
@@ -50,7 +73,7 @@ export default function SupplierPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (s: Supplier) => {
+  const openEdit = (s: SupabaseSupplier) => {
     setEditSupplier(s);
     setName(s.name); setPhone(s.phone); setAddress(s.address); setNotes(s.notes);
     setDialogOpen(true);
@@ -59,18 +82,29 @@ export default function SupplierPage() {
   const handleSave = async () => {
     if (!name.trim()) return;
     const data = { name: name.trim(), phone: phone.trim(), address: address.trim(), notes: notes.trim() };
-    if (editSupplier?.id) {
-      await db.suppliers.update(editSupplier.id, data);
-      toast.success(t('supplier.toast.updated'));
-    } else {
-      await db.suppliers.add({ ...data, createdAt: new Date(), isDeleted: 0, deletedAt: null });
-      toast.success(t('supplier.toast.added'));
+    const { error } = editSupplier?.id
+      ? await supabase.from('suppliers').update(supplierToRow(data)).eq('id', editSupplier.id)
+      : await supabase.from('suppliers').insert(supplierToRow({ ...data, isDeleted: 0, deletedAt: null }));
+    if (error) {
+      toast.error(t('supplier.toast.saveFailed', { defaultValue: 'Gagal menyimpan supplier' }));
+      return;
     }
+    toast.success(editSupplier ? t('supplier.toast.updated') : t('supplier.toast.added'));
     setDialogOpen(false);
   };
 
   const handleDelete = async () => {
-    if (deleteId) { await db.suppliers.update(deleteId, { isDeleted: 1, deletedAt: new Date() }); setDeleteId(null); toast.success(t('supplier.toast.deleted')); }
+    if (!deleteId) return;
+    const { error } = await supabase
+      .from('suppliers')
+      .update(supplierToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+      .eq('id', deleteId);
+    setDeleteId(null);
+    if (error) {
+      toast.error(t('supplier.toast.deleteFailed', { defaultValue: 'Gagal menghapus supplier' }));
+      return;
+    }
+    toast.success(t('supplier.toast.deleted'));
   };
 
   return (

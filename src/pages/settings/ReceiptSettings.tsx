@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 import { Receipt, ChevronLeft, Save } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,31 +18,32 @@ import { toast } from 'sonner';
 export default function ReceiptSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const { settings, updateSettings } = useStoreSettings();
+  // cloudStoreId adalah field lokal (belum dimigrasikan, milik fitur cloud-backup lama)
+  const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
   const { isLoggedIn: cloudLoggedIn, isSyncSubscribed: cloudSubscribed } = useCloudAuth();
   const [footerText, setFooterText] = useState('');
   const [printLogo, setPrintLogo] = useState(false);
   const [hideWatermark, setHideWatermark] = useState(false);
 
-  const isCloudActive = cloudLoggedIn && cloudSubscribed && !!storeSettings?.cloudStoreId;
+  const isCloudActive = cloudLoggedIn && cloudSubscribed && !!localSettings?.cloudStoreId;
 
   // Sync state with db loaded value
   useEffect(() => {
-    if (storeSettings) {
-      setFooterText(storeSettings.receiptFooter ?? '');
-      setPrintLogo(storeSettings.printLogo ?? false);
-      setHideWatermark(storeSettings.hideWatermark ?? false);
+    if (settings) {
+      setFooterText(settings.receiptFooter ?? '');
+      setPrintLogo(settings.printLogo ?? false);
+      setHideWatermark(settings.hideWatermark ?? false);
     }
-  }, [storeSettings]);
+  }, [settings]);
 
   if (!can('manage_store_settings')) {
     return <LockedPage title={t('receiptSettings.title')} permissionLabel={t('masterData.theme.permissionLabel')} />;
   }
 
   const handleSave = async () => {
-    if (!storeSettings?.id) return;
     try {
-      await db.storeSettings.update(storeSettings.id, {
+      await updateSettings({
         receiptFooter: footerText.trim(),
         printLogo,
         hideWatermark: hideWatermark && isCloudActive,
@@ -144,10 +146,10 @@ export default function ReceiptSettings() {
           <CardContent className="p-6 font-mono text-[11px] text-zinc-700 dark:text-zinc-300 space-y-4">
             
             {/* Logo Preview */}
-            {printLogo && storeSettings?.logo && (
+            {printLogo && settings?.logo && (
               <div className="flex justify-center mb-2">
                 <img
-                  src={storeSettings.logo}
+                  src={settings.logo}
                   alt="Store Logo"
                   className="w-12 h-12 object-contain filter grayscale contrast-125"
                 />

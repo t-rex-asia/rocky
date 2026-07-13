@@ -1,6 +1,6 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type ExpenseCategory } from '@/lib/db';
-import { useState } from 'react';
+import { db } from '@/lib/db';
+import { supabase, mapExpenseCategoryRow, expenseCategoryToRow, type SupabaseExpenseCategory } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
 import { Wallet, Plus, Trash2, Edit2, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,9 +18,31 @@ const expenseEmojiOptions = ['💡', '🏠', '👤', '🚚', '🧰', '📦', '�
 export default function ExpenseCategoriesSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
-  const expenseCategories = useLiveQuery(() =>
-    db.expenseCategories.where('isDeleted').equals(0).toArray(),
-  );
+  const [expenseCategories, setExpenseCategories] = useState<SupabaseExpenseCategory[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase
+        .from('expense_categories')
+        .select('*')
+        .eq('is_deleted', 0)
+        .order('name');
+      if (active && !error && data) setExpenseCategories(data.map(mapExpenseCategoryRow));
+      if (error) console.error('Gagal memuat kategori pengeluaran:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('expense-categories-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const [expCatDialog, setExpCatDialog] = useState(false);
   const [expCatName, setExpCatName] = useState('');
@@ -38,34 +60,36 @@ export default function ExpenseCategoriesSettings() {
   }
 
   const openExpCatAdd = () => { setExpCatEditId(null); setExpCatName(''); setExpCatIcon('📦'); setExpCatColor('#FBBF24'); setExpCatDialog(true); };
-  const openExpCatEdit = (c: ExpenseCategory) => { setExpCatEditId(c.id!); setExpCatName(c.name); setExpCatIcon(c.icon); setExpCatColor(c.color); setExpCatDialog(true); };
+  const openExpCatEdit = (c: SupabaseExpenseCategory) => { setExpCatEditId(c.id); setExpCatName(c.name); setExpCatIcon(c.icon); setExpCatColor(c.color); setExpCatDialog(true); };
   const saveExpCat = async () => {
     const name = expCatName.trim();
     if (!name) return;
-    if (expCatEditId) {
-      await db.expenseCategories.update(expCatEditId, { name, icon: expCatIcon, color: expCatColor });
-    } else {
-      await db.expenseCategories.add({
-        name,
-        icon: expCatIcon,
-        color: expCatColor,
-        isDefault: 0,
-        createdAt: new Date(),
-        isDeleted: 0,
-        deletedAt: null,
-      });
+    const { error } = expCatEditId
+      ? await supabase.from('expense_categories').update(expenseCategoryToRow({ name, icon: expCatIcon, color: expCatColor })).eq('id', expCatEditId)
+      : await supabase.from('expense_categories').insert(expenseCategoryToRow({ name, icon: expCatIcon, color: expCatColor, isDefault: 0, isDeleted: 0, deletedAt: null }));
+    if (error) {
+      toast.error(t('expenseCategory.toast.saveFailed', { defaultValue: 'Gagal menyimpan kategori pengeluaran' }));
+      return;
     }
     setExpCatDialog(false);
     toast.success(t('expenseCategory.toast.saved'));
   };
-  const deleteExpCat = async (cat: ExpenseCategory) => {
+  const deleteExpCat = async (cat: SupabaseExpenseCategory) => {
     if (!cat.id) return;
+    // expenses masih di Dexie lokal (belum dimigrasikan) — cek pemakaian lokal saja.
     const usage = await db.expenses.where('categoryId').equals(cat.id).filter(e => e.isDeleted === 0).count();
     if (usage > 0) {
       toast.error(t('expenseCategory.toast.inUse', { count: usage }));
       return;
     }
-    await db.expenseCategories.update(cat.id, { isDeleted: 1, deletedAt: new Date() });
+    const { error } = await supabase
+      .from('expense_categories')
+      .update(expenseCategoryToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+      .eq('id', cat.id);
+    if (error) {
+      toast.error(t('expenseCategory.toast.deleteFailed', { defaultValue: 'Gagal menghapus kategori pengeluaran' }));
+      return;
+    }
     toast.success(t('expenseCategory.toast.deleted'));
   };
 

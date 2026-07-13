@@ -1,5 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, isStockManaged, type TransactionItemRecord } from '@/lib/db';
+import { supabase, mapProductRow, mapPaymentMethodRow, type SupabaseProduct, type SupabasePaymentMethod } from '@/lib/supabase';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useEffect, useMemo } from 'react';
 import { ShoppingCart, Package, BarChart3, TrendingUp, AlertTriangle, Receipt, ChevronRight, ClipboardList, Wallet } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -26,27 +28,29 @@ export default function Dashboard() {
   const dateLocale = LOCALES[i18n.language] ?? id;
   const numberLocale = NUMBER_LOCALES[i18n.language] ?? 'id-ID';
 
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
+  const { settings } = useStoreSettings();
+  // seenWhatsNewIds & lastBackupAt tetap lokal per-device (belum dimigrasikan)
+  const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
 
-  // Compute unseen features once storeSettings loaded. Memoized so the array
+  // Compute unseen features once localSettings loaded. Memoized so the array
   // identity is stable until seenWhatsNewIds actually changes.
   const unseenFeatures = useMemo(
-    () => getUnseenFeatures(storeSettings?.seenWhatsNewIds),
-    [storeSettings?.seenWhatsNewIds],
+    () => getUnseenFeatures(localSettings?.seenWhatsNewIds),
+    [localSettings?.seenWhatsNewIds],
   );
 
   // Auto-show modal once on landing if there are unseen features.
   // Only fires when onboarding is done (existing user, not first-launch flow).
   useEffect(() => {
-    if (!storeSettings) return;
-    if (!storeSettings.onboardingDone) return;
+    if (!settings) return;
+    if (!settings.onboardingDone) return;
     if (unseenFeatures.length === 0) return;
     setWhatsNewOpen(true);
     // Intentionally only run when unseen list transitions from empty → non-empty
     // for the *current* settings doc. The dependency on the array length
     // guards against re-opening after dismissal in the same session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storeSettings?.id, unseenFeatures.length > 0]);
+  }, [settings?.id, unseenFeatures.length > 0]);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -61,7 +65,37 @@ export default function Dashboard() {
     return open.length;
   }, []);
 
-  const lowStockProducts = useLiveQuery(() => db.products.filter(p => p.isDeleted === 0 && isStockManaged(p) && p.stock <= 5).toArray());
+  const [lowStockProducts, setLowStockProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0);
+      if (active && !error && data) {
+        setLowStockProducts(data.map(mapProductRow).filter(p => isStockManaged(p) && p.stock <= 5));
+      }
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    const loadPaymentMethods = async () => {
+      const { data, error } = await supabase.from('payment_methods').select('*').order('name');
+      if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
+      if (error) console.error('Gagal memuat metode pembayaran:', error);
+    };
+    loadProducts();
+    loadPaymentMethods();
+
+    const channel = supabase
+      .channel('dashboard-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const todayExpenses = useLiveQuery(async () => {
     const all = await db.expenses.where('date').aboveOrEqual(today).toArray();
@@ -85,10 +119,8 @@ export default function Dashboard() {
     return map;
   }, [recentTransactions]);
 
-  const paymentMethods = useLiveQuery(() => db.paymentMethods.toArray());
-
   // Show onboarding if not done yet
-  if (storeSettings === undefined) return null; // loading
+  if (settings === undefined) return null; // loading
 
   const totalSales = todayTransactions?.reduce((sum, t) => sum + t.total, 0) ?? 0;
   const totalProfit = todayTransactions?.reduce((sum, t) => sum + t.profit, 0) ?? 0;
@@ -96,7 +128,7 @@ export default function Dashboard() {
   const txCount = todayTransactions?.length ?? 0;
   const expenseCount = todayExpenses?.length ?? 0;
 
-  const showBackup = !backupDismissed && storeSettings && shouldShowBackupReminder(storeSettings.lastBackupAt) && can('manage_backup');
+  const showBackup = !backupDismissed && localSettings && shouldShowBackupReminder(localSettings.lastBackupAt) && can('manage_backup');
 
   const quickActions: { to: string; icon: typeof ShoppingCart; label: string; color: string; perm?: PermissionKey }[] = [
     { to: '/cashier', icon: ShoppingCart, label: t('quickActions.cashier'), color: 'bg-primary/10 text-primary', perm: 'create_transaction' },
@@ -110,13 +142,13 @@ export default function Dashboard() {
       {/* Header */}
       <div>
         <p className="text-sm text-muted-foreground">{format(new Date(), 'EEEE, d MMMM yyyy', { locale: dateLocale })}</p>
-        <h1 className="text-2xl font-bold tracking-tight">{storeSettings?.storeName || t('title.storeNameFallback')}</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{settings?.storeName || t('title.storeNameFallback')}</h1>
       </div>
 
       {/* Backup Reminder */}
       {showBackup && (
         <BackupReminder
-          lastBackupAt={storeSettings?.lastBackupAt ?? null}
+          lastBackupAt={localSettings?.lastBackupAt ?? null}
           onDismiss={() => setBackupDismissed(true)}
           onBackup={exportBackupData}
         />

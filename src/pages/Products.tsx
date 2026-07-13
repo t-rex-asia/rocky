@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged } from '@/lib/db';
-import { supabase, mapCategoryRow, mapProductRow, categoryToRow, productToRow, type SupabaseCategory, type SupabaseProduct } from '@/lib/supabase';
+import { isStockManaged } from '@/lib/db';
+import { supabase, mapCategoryRow, mapProductRow, mapUnitRow, categoryToRow, productToRow, type SupabaseCategory, type SupabaseProduct, type SupabaseUnit } from '@/lib/supabase';
 import { useEffect, useState, useRef } from 'react';
 import { Plus, Search, Edit2, Trash2, Package as PackageIcon, Camera, X, Copy, Infinity as InfinityIcon, ScanLine, Upload, Download, AlertTriangle, CheckCircle2, XCircle, Loader2, FileSpreadsheet } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -91,8 +90,7 @@ function ProductsContent() {
 
   const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
   const [categories, setCategories] = useState<SupabaseCategory[] | undefined>(undefined);
-  // Satuan (units) belum dipindah ke Supabase di fase ini — tetap lokal per-device.
-  const units = useLiveQuery(() => db.units.where('isDeleted').equals(0).toArray());
+  const [units, setUnits] = useState<SupabaseUnit[] | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -106,13 +104,20 @@ function ProductsContent() {
       if (active && !error && data) setCategories(data.map(mapCategoryRow));
       if (error) console.error('Gagal memuat kategori:', error);
     };
+    const loadUnits = async () => {
+      const { data, error } = await supabase.from('units').select('*').eq('is_deleted', 0).order('name');
+      if (active && !error && data) setUnits(data.map(mapUnitRow));
+      if (error) console.error('Gagal memuat satuan:', error);
+    };
     loadProducts();
     loadCategories();
+    loadUnits();
 
     const channel = supabase
       .channel('products-page-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCategories)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'units' }, loadUnits)
       .subscribe();
 
     return () => {

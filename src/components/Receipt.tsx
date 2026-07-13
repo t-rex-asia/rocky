@@ -1,5 +1,4 @@
-import { useRef, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect, useRef, useState } from 'react';
 import { format } from 'date-fns';
 import { id, enUS, ms } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
@@ -9,7 +8,8 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
-import { db, type Transaction, type StoreSettings, type TransactionItemRecord } from '@/lib/db';
+import { type Transaction, type StoreSettings, type TransactionItemRecord } from '@/lib/db';
+import { supabase, mapCustomerRow } from '@/lib/supabase';
 import { isNativePlatform, printNativeBluetooth, getESCPOSData, convertBase64ToEscPosImage } from '@/lib/printer';
 import { Capacitor } from '@capacitor/core';
 import { downloadOrShareFile } from '@/lib/file-utils';
@@ -42,11 +42,16 @@ export default function Receipt({ open, onClose, transaction, items, storeSettin
   const rp = (n: number) => `Rp ${n.toLocaleString(numberLocale)}`;
 
   const storeName = storeSettings?.storeName || t('receipt.storeFallback');
-  const customer = useLiveQuery(
-    () => transaction.customerId ? db.customers.get(transaction.customerId) : undefined,
-    [transaction.customerId],
-  );
-  const customerPhone = customer?.phone;
+  const [customerPhone, setCustomerPhone] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!transaction.customerId) { setCustomerPhone(undefined); return; }
+    let active = true;
+    supabase.from('customers').select('*').eq('id', transaction.customerId).maybeSingle().then(({ data }) => {
+      if (active && data) setCustomerPhone(mapCustomerRow(data).phone);
+    });
+    return () => { active = false; };
+  }, [transaction.customerId]);
 
   const captureReceipt = async (): Promise<HTMLCanvasElement | null> => {
     if (!receiptRef.current) return null;

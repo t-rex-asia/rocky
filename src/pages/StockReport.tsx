@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
-import { useState } from 'react';
+import { supabase, mapProductRow, type SupabaseProduct } from '@/lib/supabase';
+import { useState, useEffect } from 'react';
 import { Package, ArrowDownToLine, ArrowUpFromLine, TrendingUp, AlertTriangle, Warehouse, BarChart3, ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,7 +26,28 @@ export default function StockReport() {
   const days = Number(period);
   const since = startOfDay(subDays(new Date(), days));
 
-  const products = useLiveQuery(() => db.products.toArray());
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const loadProducts = async () => {
+      const { data, error } = await supabase.from('products').select('*');
+      if (active && !error && data) setProducts(data.map(mapProductRow));
+      if (error) console.error('Gagal memuat produk:', error);
+    };
+    loadProducts();
+
+    const channel = supabase
+      .channel('stock-report-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   const stockIns = useLiveQuery(async () => db.stockIns.where('date').aboveOrEqual(since).toArray(), [days]);
   const stockOuts = useLiveQuery(async () => db.stockOuts.where('date').aboveOrEqual(since).toArray(), [days]);
 
