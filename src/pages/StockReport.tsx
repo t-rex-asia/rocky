@@ -1,6 +1,9 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
-import { supabase, mapProductRow, type SupabaseProduct } from '@/lib/supabase';
+import {
+  supabase,
+  mapProductRow, type SupabaseProduct,
+  mapStockInRow, type SupabaseStockIn,
+  mapStockOutRow, type SupabaseStockOut,
+} from '@/lib/supabase';
 import { useState, useEffect } from 'react';
 import { Package, ArrowDownToLine, ArrowUpFromLine, TrendingUp, AlertTriangle, Warehouse, BarChart3, ArrowLeft } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +30,8 @@ export default function StockReport() {
   const since = startOfDay(subDays(new Date(), days));
 
   const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [stockIns, setStockIns] = useState<SupabaseStockIn[] | undefined>(undefined);
+  const [stockOuts, setStockOuts] = useState<SupabaseStockOut[] | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
@@ -35,21 +40,32 @@ export default function StockReport() {
       if (active && !error && data) setProducts(data.map(mapProductRow));
       if (error) console.error('Gagal memuat produk:', error);
     };
+    const loadStockIns = async () => {
+      const { data, error } = await supabase.from('stock_ins').select('*').gte('date', since.toISOString());
+      if (active && !error && data) setStockIns(data.map(mapStockInRow));
+      if (error) console.error('Gagal memuat stock in:', error);
+    };
+    const loadStockOuts = async () => {
+      const { data, error } = await supabase.from('stock_outs').select('*').gte('date', since.toISOString());
+      if (active && !error && data) setStockOuts(data.map(mapStockOutRow));
+      if (error) console.error('Gagal memuat stock out:', error);
+    };
     loadProducts();
+    loadStockIns();
+    loadStockOuts();
 
     const channel = supabase
       .channel('stock-report-page-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_ins' }, loadStockIns)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_outs' }, loadStockOuts)
       .subscribe();
 
     return () => {
       active = false;
       supabase.removeChannel(channel);
     };
-  }, []);
-
-  const stockIns = useLiveQuery(async () => db.stockIns.where('date').aboveOrEqual(since).toArray(), [days]);
-  const stockOuts = useLiveQuery(async () => db.stockOuts.where('date').aboveOrEqual(since).toArray(), [days]);
+  }, [days]);
 
   if (!can('view_reports')) {
     return <LockedPage title={t('stockReport.locked.title')} permissionLabel={t('stockReport.locked.permissionLabel')} />;
