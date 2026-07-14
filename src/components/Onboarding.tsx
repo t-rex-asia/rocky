@@ -10,7 +10,6 @@ import { applyThemeColor } from '@/hooks/use-theme-color';
 import { SUPPORTED_LANGUAGES, type SupportedLanguage } from '@/i18n';
 import { restoreFromBackupData } from '@/lib/backup';
 import { downloadBackup, listBackups, type CloudBackup } from '@/lib/cloud-api';
-import { db } from '@/lib/db';
 import { useStoreSettings } from '@/hooks/use-store-settings';
 import { supabase, categoryToRow, unitToRow, productToRow, supplierToRow } from '@/lib/supabase';
 import { nativeGoogleSignIn } from '@/lib/google-auth';
@@ -157,39 +156,45 @@ export default function Onboarding({ onComplete }: OnboardingProps) {
 
     await supabase.from('suppliers').insert(dummySuppliers.map(s => supplierToRow({ ...s, isDeleted: 0, deletedAt: null })));
 
+    const { data: pmRows } = await supabase.from('payment_methods').select('id, name');
+    const paymentMethodByName = (name: string) => (pmRows ?? []).find(pm => pm.name === name)?.id ?? (pmRows ?? [])[0]?.id ?? null;
+    const tunaiId = paymentMethodByName('Tunai');
+    const qrisId = paymentMethodByName('QRIS');
+
     const now = new Date();
     const discNull: 'percentage' | 'nominal' | null = null;
     const p = (sku: string) => productBySku.get(sku)!;
 
-    const tx1Id = await db.transactions.add({
-      subtotal: 40000, discountType: discNull, discountValue: 0, discountAmount: 0, total: 40000,
-      paymentMethodId: 1, paymentAmount: 50000, change: 10000, profit: 21000,
-      date: new Date(now.getTime() - 3600000), receiptNumber: 'TX-DEMO-001',
-    });
-    await db.transactionItems.bulkAdd([
-      { transactionId: tx1Id as number, productId: p('NG001').id, productName: p('NG001').name, quantity: 2, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 30000 },
-      { transactionId: tx1Id as number, productId: p('ET001').id, productName: p('ET001').name, quantity: 2, price: 5000, hpp: 1500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
-    ]);
+    const demoCheckout = (receiptNumber: string, date: Date, paymentMethodId: number | null, paymentAmount: number, items: { sku: string; qty: number; price: number; hpp: number }[]) => {
+      const cart = items.map(i => ({
+        productId: p(i.sku).id, productName: p(i.sku).name, quantity: i.qty, price: i.price, hpp: i.hpp,
+        discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: i.price * i.qty, trackStock: true,
+      }));
+      const subtotal = cart.reduce((s, c) => s + c.subtotal, 0);
+      const profit = cart.reduce((s, c) => s + (c.price - c.hpp) * c.quantity, 0);
+      return supabase.rpc('checkout_new', {
+        p_transaction: {
+          subtotal, discountType: discNull, discountValue: 0, discountAmount: 0, total: subtotal,
+          paymentMethodId, paymentAmount, change: Math.max(0, paymentAmount - subtotal), profit,
+          date: date.toISOString(), receiptNumber, status: 'completed',
+        },
+        p_cart: cart,
+        p_debt: null,
+      });
+    };
 
-    const tx2Id = await db.transactions.add({
-      subtotal: 30000, discountType: discNull, discountValue: 0, discountAmount: 0, total: 30000,
-      paymentMethodId: 3, paymentAmount: 30000, change: 0, profit: 14000,
-      date: new Date(now.getTime() - 1800000), receiptNumber: 'TX-DEMO-002',
-    });
-    await db.transactionItems.bulkAdd([
-      { transactionId: tx2Id as number, productId: p('AB001').id, productName: p('AB001').name, quantity: 1, price: 20000, hpp: 12000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 20000 },
-      { transactionId: tx2Id as number, productId: p('KS001').id, productName: p('KS001').name, quantity: 1, price: 10000, hpp: 4000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 10000 },
+    await demoCheckout('TX-DEMO-001', new Date(now.getTime() - 3600000), tunaiId, 50000, [
+      { sku: 'NG001', qty: 2, price: 15000, hpp: 8000 },
+      { sku: 'ET001', qty: 2, price: 5000, hpp: 1500 },
     ]);
-
-    const tx3Id = await db.transactions.add({
-      subtotal: 40000, discountType: discNull, discountValue: 0, discountAmount: 0, total: 40000,
-      paymentMethodId: 1, paymentAmount: 50000, change: 10000, profit: 18500,
-      date: new Date(now.getTime() - 900000), receiptNumber: 'TX-DEMO-003',
-    });
-    await db.transactionItems.bulkAdd([
-      { transactionId: tx3Id as number, productId: p('NG001').id, productName: p('NG001').name, quantity: 1, price: 15000, hpp: 8000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 15000 },
-      { transactionId: tx3Id as number, productId: p('SA001').id, productName: p('SA001').name, quantity: 1, price: 18000, hpp: 10000, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 18000 },
-      { transactionId: tx3Id as number, productId: p('EJ001').id, productName: p('EJ001').name, quantity: 1, price: 7000, hpp: 2500, discountType: discNull, discountValue: 0, discountAmount: 0, subtotal: 7000 },
+    await demoCheckout('TX-DEMO-002', new Date(now.getTime() - 1800000), qrisId, 30000, [
+      { sku: 'AB001', qty: 1, price: 20000, hpp: 12000 },
+      { sku: 'KS001', qty: 1, price: 10000, hpp: 4000 },
+    ]);
+    await demoCheckout('TX-DEMO-003', new Date(now.getTime() - 900000), tunaiId, 50000, [
+      { sku: 'NG001', qty: 1, price: 15000, hpp: 8000 },
+      { sku: 'SA001', qty: 1, price: 18000, hpp: 10000 },
+      { sku: 'EJ001', qty: 1, price: 7000, hpp: 2500 },
     ]);
   };
 

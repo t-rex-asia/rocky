@@ -1,6 +1,11 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged, type TransactionItemRecord } from '@/lib/db';
-import { supabase, mapProductRow, mapPaymentMethodRow, type SupabaseProduct, type SupabasePaymentMethod } from '@/lib/supabase';
+import { db, isStockManaged } from '@/lib/db';
+import {
+  supabase,
+  mapProductRow, mapPaymentMethodRow, type SupabaseProduct, type SupabasePaymentMethod,
+  mapTransactionRow, mapTransactionItemRow, type SupabaseTransaction, type SupabaseTransactionItem,
+  mapExpenseRow, type SupabaseExpense,
+} from '@/lib/supabase';
 import { useStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useEffect, useMemo } from 'react';
 import { ShoppingCart, Package, BarChart3, TrendingUp, AlertTriangle, Receipt, ChevronRight, ClipboardList, Wallet } from 'lucide-react';
@@ -55,18 +60,13 @@ export default function Dashboard() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const todayTransactions = useLiveQuery(async () => {
-    const all = await db.transactions.where('date').aboveOrEqual(today).toArray();
-    return all.filter(t => t.status !== 'open');
-  }, []);
-
-  const openBillsCount = useLiveQuery(async () => {
-    const open = await db.transactions.where('status').equals('open').toArray();
-    return open.length;
-  }, []);
-
   const [lowStockProducts, setLowStockProducts] = useState<SupabaseProduct[] | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+  const [todayTransactions, setTodayTransactions] = useState<SupabaseTransaction[] | undefined>(undefined);
+  const [openBillsCount, setOpenBillsCount] = useState<number | undefined>(undefined);
+  const [todayExpenses, setTodayExpenses] = useState<SupabaseExpense[] | undefined>(undefined);
+  const [recentTransactions, setRecentTransactions] = useState<SupabaseTransaction[] | undefined>(undefined);
+  const [recentTxItems, setRecentTxItems] = useState<Record<number, SupabaseTransactionItem[]>>({});
 
   useEffect(() => {
     let active = true;
@@ -82,13 +82,59 @@ export default function Dashboard() {
       if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
       if (error) console.error('Gagal memuat metode pembayaran:', error);
     };
+    const loadTodayTransactions = async () => {
+      const { data, error } = await supabase.from('transactions').select('*').gte('date', today.toISOString()).neq('status', 'open');
+      if (active && !error && data) setTodayTransactions(data.map(mapTransactionRow));
+      if (error) console.error('Gagal memuat transaksi hari ini:', error);
+    };
+    const loadOpenBillsCount = async () => {
+      const { count, error } = await supabase.from('transactions').select('id', { count: 'exact', head: true }).eq('status', 'open');
+      if (active && !error) setOpenBillsCount(count ?? 0);
+      if (error) console.error('Gagal memuat open bill:', error);
+    };
+    const loadTodayExpenses = async () => {
+      const { data, error } = await supabase.from('expenses').select('*').gte('date', today.toISOString()).eq('is_deleted', 0);
+      if (active && !error && data) setTodayExpenses(data.map(mapExpenseRow));
+      if (error) console.error('Gagal memuat pengeluaran hari ini:', error);
+    };
+    const loadRecentTransactions = async () => {
+      const { data, error } = await supabase.from('transactions').select('*').order('date', { ascending: false }).limit(5);
+      if (active && !error && data) {
+        const recent = data.map(mapTransactionRow);
+        setRecentTransactions(recent);
+        const txIds = recent.map(t => t.id).filter(Boolean);
+        if (txIds.length > 0) {
+          const { data: itemRows } = await supabase.from('transaction_items').select('*').in('transaction_id', txIds);
+          const map: Record<number, SupabaseTransactionItem[]> = {};
+          for (const item of (itemRows ?? []).map(mapTransactionItemRow)) {
+            if (!map[item.transactionId]) map[item.transactionId] = [];
+            map[item.transactionId].push(item);
+          }
+          if (active) setRecentTxItems(map);
+        } else {
+          setRecentTxItems({});
+        }
+      }
+      if (error) console.error('Gagal memuat transaksi terbaru:', error);
+    };
     loadProducts();
     loadPaymentMethods();
+    loadTodayTransactions();
+    loadOpenBillsCount();
+    loadTodayExpenses();
+    loadRecentTransactions();
 
     const channel = supabase
       .channel('dashboard-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        loadTodayTransactions();
+        loadOpenBillsCount();
+        loadRecentTransactions();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transaction_items' }, loadRecentTransactions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, loadTodayExpenses)
       .subscribe();
 
     return () => {
@@ -96,28 +142,6 @@ export default function Dashboard() {
       supabase.removeChannel(channel);
     };
   }, []);
-
-  const todayExpenses = useLiveQuery(async () => {
-    const all = await db.expenses.where('date').aboveOrEqual(today).toArray();
-    return all.filter(e => e.isDeleted === 0);
-  }, []);
-
-  const recentTransactions = useLiveQuery(() =>
-    db.transactions.orderBy('date').reverse().limit(5).toArray()
-  );
-
-  // Query items for recent transactions
-  const recentTxItems = useLiveQuery(async () => {
-    if (!recentTransactions || recentTransactions.length === 0) return {};
-    const txIds = recentTransactions.map(t => t.id!).filter(Boolean);
-    const items = await db.transactionItems.where('transactionId').anyOf(txIds).toArray();
-    const map: Record<number, TransactionItemRecord[]> = {};
-    for (const item of items) {
-      if (!map[item.transactionId]) map[item.transactionId] = [];
-      map[item.transactionId].push(item);
-    }
-    return map;
-  }, [recentTransactions]);
 
   // Show onboarding if not done yet
   if (settings === undefined) return null; // loading

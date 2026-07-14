@@ -1,6 +1,10 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
-import { supabase, mapExpenseCategoryRow, mapPaymentMethodRow, type SupabaseExpenseCategory, type SupabasePaymentMethod } from '@/lib/supabase';
+import {
+  supabase,
+  mapExpenseCategoryRow, mapPaymentMethodRow, type SupabaseExpenseCategory, type SupabasePaymentMethod,
+  mapTransactionRow, mapTransactionItemRow, type SupabaseTransaction, type SupabaseTransactionItem,
+  mapExpenseRow, type SupabaseExpense,
+  mapDebtPaymentRow, type SupabaseDebtPayment,
+} from '@/lib/supabase';
 import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useEffect, useState } from 'react';
 import { BarChart3, TrendingUp, ShoppingCart, Package, DollarSign, ArrowDown, ArrowUp, Minus, Wallet, CreditCard, Download, Printer } from 'lucide-react';
@@ -59,27 +63,10 @@ export default function Laporan() {
     return { start: startOfDay(subDays(new Date(), days - 1)), end: endOfDay(new Date()) };
   })();
 
-  const transactions = useLiveQuery(async () => {
-    const all = await db.transactions.where('date').between(dateRange.start, dateRange.end, true, true).toArray();
-    return all.filter(t => t.status !== 'open');
-  }, [dateRange.start.getTime(), dateRange.end.getTime()]);
-
-  const txItems = useLiveQuery(async () => {
-    if (!transactions || transactions.length === 0) return [];
-    const txIds = transactions.map(t => t.id!).filter(Boolean);
-    return db.transactionItems.where('transactionId').anyOf(txIds).toArray();
-  }, [transactions]);
-
-  const expenses = useLiveQuery(async () => {
-    const all = await db.expenses.where('date').between(dateRange.start, dateRange.end, true, true).toArray();
-    return all.filter(e => e.isDeleted === 0);
-  }, [dateRange.start.getTime(), dateRange.end.getTime()]);
-
-  const debtPayments = useLiveQuery(
-    () => db.debtPayments.where('date').between(dateRange.start, dateRange.end, true, true).toArray(),
-    [dateRange.start.getTime(), dateRange.end.getTime()],
-  );
-
+  const [transactions, setTransactions] = useState<SupabaseTransaction[] | undefined>(undefined);
+  const [txItems, setTxItems] = useState<SupabaseTransactionItem[] | undefined>(undefined);
+  const [expenses, setExpenses] = useState<SupabaseExpense[] | undefined>(undefined);
+  const [debtPayments, setDebtPayments] = useState<SupabaseDebtPayment[] | undefined>(undefined);
   const [expenseCategories, setExpenseCategories] = useState<SupabaseExpenseCategory[] | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
 
@@ -109,6 +96,54 @@ export default function Laporan() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    const startIso = dateRange.start.toISOString();
+    const endIso = dateRange.end.toISOString();
+
+    const loadTransactions = async () => {
+      const { data, error } = await supabase.from('transactions').select('*').gte('date', startIso).lte('date', endIso).neq('status', 'open');
+      if (active && !error && data) {
+        const tx = data.map(mapTransactionRow);
+        setTransactions(tx);
+        const txIds = tx.map(t => t.id).filter(Boolean);
+        if (txIds.length > 0) {
+          const { data: itemRows } = await supabase.from('transaction_items').select('*').in('transaction_id', txIds);
+          if (active) setTxItems((itemRows ?? []).map(mapTransactionItemRow));
+        } else if (active) {
+          setTxItems([]);
+        }
+      }
+      if (error) console.error('Gagal memuat transaksi:', error);
+    };
+    const loadExpenses = async () => {
+      const { data, error } = await supabase.from('expenses').select('*').gte('date', startIso).lte('date', endIso).eq('is_deleted', 0);
+      if (active && !error && data) setExpenses(data.map(mapExpenseRow));
+      if (error) console.error('Gagal memuat pengeluaran:', error);
+    };
+    const loadDebtPayments = async () => {
+      const { data, error } = await supabase.from('debt_payments').select('*').gte('date', startIso).lte('date', endIso);
+      if (active && !error && data) setDebtPayments(data.map(mapDebtPaymentRow));
+      if (error) console.error('Gagal memuat cicilan hutang:', error);
+    };
+    loadTransactions();
+    loadExpenses();
+    loadDebtPayments();
+
+    const channel = supabase
+      .channel('reports-page-range-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, loadTransactions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transaction_items' }, loadTransactions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, loadExpenses)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debt_payments' }, loadDebtPayments)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [dateRange.start.getTime(), dateRange.end.getTime()]);
 
   if (!can('view_reports')) {
     return <LockedPage title={t('locked.title')} permissionLabel={t('locked.permissionLabel')} />;

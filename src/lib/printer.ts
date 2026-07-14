@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { format } from 'date-fns';
-import type { Transaction, StoreSettings, TransactionItemRecord } from './db';
+import type { StoreSettings } from './db';
+import type { SupabaseTransaction as Transaction, SupabaseTransactionItem as TransactionItemRecord } from './supabase';
 
 declare global {
   interface Window {

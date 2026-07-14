@@ -531,6 +531,147 @@ export function mapStockOpnameItemRow(row: Record<string, unknown>): SupabaseSto
   };
 }
 
+// --- transactions / transaction_items -------------------------------------------
+
+export interface SupabaseTransaction {
+  id: number;
+  subtotal: number;
+  discountType: 'percentage' | 'nominal' | null;
+  discountValue: number;
+  discountAmount: number;
+  total: number;
+  paymentMethodId: number;
+  paymentAmount: number;
+  change: number;
+  profit: number;
+  date: string;
+  receiptNumber: string;
+  status: 'open' | 'completed';
+  customerId?: number;
+  customerName?: string;
+  tableNumber?: string; // field lama, tidak lagi dipakai di UI — selalu undefined
+  remarks?: string;
+  openedAt?: string;
+  closedAt?: string;
+  createdBy?: number;
+  debtAmount?: number;
+  updatedAt: string;
+}
+
+export function mapTransactionRow(row: Record<string, unknown>): SupabaseTransaction {
+  return {
+    id: row.id as number,
+    subtotal: Number(row.subtotal),
+    discountType: (row.discount_type as 'percentage' | 'nominal' | null) ?? null,
+    discountValue: Number(row.discount_value),
+    discountAmount: Number(row.discount_amount),
+    total: Number(row.total),
+    paymentMethodId: row.payment_method_id as number,
+    paymentAmount: Number(row.payment_amount),
+    change: Number(row.change),
+    profit: Number(row.profit),
+    date: row.date as string,
+    receiptNumber: row.receipt_number as string,
+    status: row.status as 'open' | 'completed',
+    customerId: (row.customer_id as number | null) ?? undefined,
+    customerName: (row.customer_name as string | null) ?? undefined,
+    remarks: (row.remarks as string | null) ?? undefined,
+    openedAt: (row.opened_at as string | null) ?? undefined,
+    closedAt: (row.closed_at as string | null) ?? undefined,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    debtAmount: (row.debt_amount as number | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export interface SupabaseTransactionItem {
+  id: number;
+  transactionId: number;
+  productId: number;
+  productName: string;
+  quantity: number;
+  price: number;
+  hpp: number;
+  discountType: 'percentage' | 'nominal' | null;
+  discountValue: number;
+  discountAmount: number;
+  subtotal: number;
+  notes?: string;
+}
+
+export function mapTransactionItemRow(row: Record<string, unknown>): SupabaseTransactionItem {
+  return {
+    id: row.id as number,
+    transactionId: row.transaction_id as number,
+    productId: row.product_id as number,
+    productName: row.product_name as string,
+    quantity: Number(row.quantity),
+    price: Number(row.price),
+    hpp: Number(row.hpp),
+    discountType: (row.discount_type as 'percentage' | 'nominal' | null) ?? null,
+    discountValue: Number(row.discount_value),
+    discountAmount: Number(row.discount_amount),
+    subtotal: Number(row.subtotal),
+    notes: (row.notes as string | null) ?? undefined,
+  };
+}
+
+// --- debts / debt_payments -------------------------------------------------------
+
+export interface SupabaseDebt {
+  id: number;
+  transactionId: number;
+  customerId: number;
+  customerName: string;
+  originalAmount: number;
+  remainingAmount: number;
+  status: 'unpaid' | 'partial' | 'paid';
+  createdAt: string;
+  settledAt: string | null;
+  dueDate?: string;
+  updatedAt: string;
+}
+
+export function mapDebtRow(row: Record<string, unknown>): SupabaseDebt {
+  return {
+    id: row.id as number,
+    transactionId: row.transaction_id as number,
+    customerId: row.customer_id as number,
+    customerName: row.customer_name as string,
+    originalAmount: Number(row.original_amount),
+    remainingAmount: Number(row.remaining_amount),
+    status: row.status as 'unpaid' | 'partial' | 'paid',
+    createdAt: row.created_at as string,
+    settledAt: (row.settled_at as string | null) ?? null,
+    dueDate: (row.due_date as string | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export interface SupabaseDebtPayment {
+  id: number;
+  debtId: number;
+  amount: number;
+  paymentMethodId: number;
+  date: string;
+  notes?: string;
+  createdBy?: number;
+  updatedAt: string;
+}
+
+export function mapDebtPaymentRow(row: Record<string, unknown>): SupabaseDebtPayment {
+  return {
+    id: row.id as number,
+    debtId: row.debt_id as number,
+    amount: Number(row.amount),
+    paymentMethodId: row.payment_method_id as number,
+    date: row.date as string,
+    notes: (row.notes as string | null) ?? undefined,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
 // --- users (staff PIN login) -------------------------------------------------
 // Tabel `users` di Postgres tidak boleh dibaca langsung (RLS tanpa policy,
 // menyimpan pin_hash) — hanya lewat view `users_public` (kolom aman) dan

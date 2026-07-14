@@ -1,5 +1,4 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged, type Transaction, type TransactionItemRecord } from '@/lib/db';
+import { isStockManaged } from '@/lib/db';
 import {
   supabase,
   mapProductRow, productToRow, type SupabaseProduct,
@@ -7,6 +6,7 @@ import {
   mapPaymentMethodRow, type SupabasePaymentMethod,
   mapCustomerRow, type SupabaseCustomer,
   mapUserRow, type SupabaseUser,
+  mapTransactionRow, mapTransactionItemRow, type SupabaseTransaction, type SupabaseTransactionItem,
 } from '@/lib/supabase';
 import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useRef, useEffect } from 'react';
@@ -97,9 +97,9 @@ export default function Kasir() {
   const [dueDate, setDueDate] = useState<Date | undefined>();
   const [isQuickAdding, setIsQuickAdding] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
-  const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
+  const [lastTransaction, setLastTransaction] = useState<SupabaseTransaction | null>(null);
   const [lastDebtDueDate, setLastDebtDueDate] = useState<Date | undefined>();
-  const [lastTxItems, setLastTxItems] = useState<TransactionItemRecord[]>([]);
+  const [lastTxItems, setLastTxItems] = useState<SupabaseTransactionItem[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerId, setCustomerId] = useState<number | undefined>(undefined);
   const [remarks, setRemarks] = useState('');
@@ -111,14 +111,14 @@ export default function Kasir() {
   const [customItemPrice, setCustomItemPrice] = useState('');
   const [tempItemNotes, setTempItemNotes] = useState('');
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
-  const [cancelTargetTx, setCancelTargetTx] = useState<Transaction | null>(null);
+  const [cancelTargetTx, setCancelTargetTx] = useState<SupabaseTransaction | null>(null);
   const [scanInput, setScanInput] = useState('');
   const scanInputRef = useRef<HTMLInputElement>(null);
 
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [kitchenTicketOpen, setKitchenTicketOpen] = useState(false);
-  const [kitchenTicketTx, setKitchenTicketTx] = useState<Transaction | null>(null);
-  const [kitchenTicketItems, setKitchenTicketItems] = useState<TransactionItemRecord[]>([]);
+  const [kitchenTicketTx, setKitchenTicketTx] = useState<SupabaseTransaction | null>(null);
+  const [kitchenTicketItems, setKitchenTicketItems] = useState<SupabaseTransactionItem[]>([]);
 
   // Cashier layout mode settings (default: 'grid')
   const [layoutMode] = useState<'grid' | 'rows'>(() => {
@@ -133,6 +133,7 @@ export default function Kasir() {
   const [categories, setCategories] = useState<SupabaseCategory[] | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
   const [customers, setCustomers] = useState<SupabaseCustomer[] | undefined>(undefined);
+  const [openBills, setOpenBills] = useState<SupabaseTransaction[] | undefined>(undefined);
   const storeSettings = useMergedStoreSettings();
 
   useEffect(() => {
@@ -157,10 +158,16 @@ export default function Kasir() {
       if (active && !error && data) setCustomers(data.map(mapCustomerRow));
       if (error) console.error('Gagal memuat pelanggan:', error);
     };
+    const loadOpenBills = async () => {
+      const { data, error } = await supabase.from('transactions').select('*').eq('status', 'open').order('date', { ascending: false });
+      if (active && !error && data) setOpenBills(data.map(mapTransactionRow));
+      if (error) console.error('Gagal memuat open bill:', error);
+    };
     loadProducts();
     loadCategories();
     loadPaymentMethods();
     loadCustomers();
+    loadOpenBills();
 
     const channel = supabase
       .channel('cashier-page-changes')
@@ -168,6 +175,7 @@ export default function Kasir() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCategories)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'customers' }, loadCustomers)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, loadOpenBills)
       .subscribe();
 
     return () => {
@@ -176,7 +184,6 @@ export default function Kasir() {
     };
   }, []);
 
-  const openBills = useLiveQuery(() => db.transactions.where('status').equals('open').reverse().sortBy('date'));
   const [allUsers, setAllUsers] = useState<SupabaseUser[] | undefined>(undefined);
 
   useEffect(() => {
@@ -375,123 +382,73 @@ export default function Kasir() {
 
   // === Open Bill Operations ===
 
+  const buildCartPayload = () => cart.map(c => ({
+    productId: c.product.id,
+    productName: c.product.name,
+    quantity: c.qty,
+    price: c.product.price,
+    hpp: c.product.hpp,
+    discountType: c.discountType,
+    discountValue: c.discountValue,
+    discountAmount: getItemDiscountAmount(c),
+    subtotal: getItemSubtotal(c),
+    notes: c.notes,
+    trackStock: isStockManaged(c.product),
+  }));
+
   const saveOpenBill = async (shouldPrintKitchen: boolean = false) => {
     if (cart.length === 0) { toast.error(t('cashier.toast.cartEmpty')); return; }
 
     const now = new Date();
-    let savedTxObj: Transaction | null = null;
-    let savedItemsObj: TransactionItemRecord[] = [];
+    const cartPayload = buildCartPayload();
+    let savedTxObj: SupabaseTransaction | null = null;
+    const savedItemsObj: SupabaseTransactionItem[] = cartPayload.map((c, i) => ({ id: -1 - i, transactionId: editingTxId ?? -1, ...c }));
 
     if (editingTxId) {
-      // Update existing open bill
-      const oldItems = await db.transactionItems.where('transactionId').equals(editingTxId).toArray();
-
-      await db.transactions.update(editingTxId, {
-        subtotal,
-        discountType: txDiscountType,
-        discountValue: Number(txDiscountValue) || 0,
-        discountAmount: txDiscountAmount,
-        total,
-        customerId,
-        customerName: customerName.trim() || undefined,
-        remarks: remarks.trim() || undefined,
-        date: now,
+      const { error } = await supabase.rpc('checkout_update_open_bill', {
+        p_transaction_id: editingTxId,
+        p_transaction: {
+          subtotal, discountType: txDiscountType, discountValue: Number(txDiscountValue) || 0,
+          discountAmount: txDiscountAmount, total,
+          paymentMethodId: 0, paymentAmount: 0, change: 0, profit: 0,
+          status: 'open',
+          customerId, customerName: customerName.trim() || undefined,
+          remarks: remarks.trim() || undefined,
+          date: now.toISOString(),
+          debtAmount: 0,
+        },
+        p_cart: cartPayload,
+        p_debt: null,
       });
-      await db.transactionItems.where('transactionId').equals(editingTxId).delete();
-      const itemRecords: TransactionItemRecord[] = cart.map(c => ({
-        transactionId: editingTxId,
-        productId: c.product.id!,
-        productName: c.product.name,
-        quantity: c.qty,
-        price: c.product.price,
-        hpp: c.product.hpp,
-        discountType: c.discountType,
-        discountValue: c.discountValue,
-        discountAmount: getItemDiscountAmount(c),
-        subtotal: getItemSubtotal(c),
-        notes: c.notes,
-      }));
-      await db.transactionItems.bulkAdd(itemRecords);
+      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
 
-      // Adjust stock deltas
-      for (const cartItem of cart) {
-        if (!isStockManaged(cartItem.product)) continue;
-        const oldItem = oldItems.find(oi => oi.productId === cartItem.product.id);
-        const oldQty = oldItem?.quantity ?? 0;
-        const newQty = cartItem.qty;
-        const delta = newQty - oldQty;
-        if (delta !== 0) {
-          await supabase.from('products').update(productToRow({ stock: cartItem.product.stock - delta })).eq('id', cartItem.product.id);
-        }
-      }
-      // Restore stock for removed items that were in old bill
-      for (const oldItem of oldItems) {
-        const stillInCart = cart.find(c => c.product.id === oldItem.productId);
-        if (!stillInCart) {
-          const { data: productRow } = await supabase.from('products').select('*').eq('id', oldItem.productId).maybeSingle();
-          const product = productRow ? mapProductRow(productRow) : null;
-          if (product && isStockManaged(product)) {
-            await supabase.from('products').update(productToRow({ stock: product.stock + oldItem.quantity })).eq('id', oldItem.productId);
-          }
-        }
-      }
-
-      const updatedTx = await db.transactions.get(editingTxId);
+      const { data: txRow } = await supabase.from('transactions').select('*').eq('id', editingTxId).maybeSingle();
+      const updatedTx = txRow ? mapTransactionRow(txRow) : null;
       toast.success(t('cashier.toast.billUpdated', { receiptNumber: updatedTx?.receiptNumber }));
-
-      if (updatedTx) {
-        savedTxObj = updatedTx;
-        savedItemsObj = itemRecords;
-      }
+      savedTxObj = updatedTx;
     } else {
       const receiptNumber = `TX${Date.now()}`;
+      const { data, error } = await supabase.rpc('checkout_new', {
+        p_transaction: {
+          subtotal, discountType: txDiscountType, discountValue: Number(txDiscountValue) || 0,
+          discountAmount: txDiscountAmount, total,
+          paymentMethodId: 0, paymentAmount: 0, change: 0, profit: 0,
+          date: now.toISOString(), receiptNumber, status: 'open',
+          customerId, customerName: customerName.trim() || undefined,
+          remarks: remarks.trim() || undefined,
+          openedAt: now.toISOString(),
+          createdBy: currentUser?.id,
+          debtAmount: 0,
+        },
+        p_cart: cartPayload,
+        p_debt: null,
+      });
+      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
 
-      const txData: Transaction = {
-        subtotal,
-        discountType: txDiscountType,
-        discountValue: Number(txDiscountValue) || 0,
-        discountAmount: txDiscountAmount,
-        total,
-        paymentMethodId: 0,
-        paymentAmount: 0,
-        change: 0,
-        profit: 0,
-        date: now,
-        receiptNumber,
-        status: 'open',
-        customerId,
-        customerName: customerName.trim() || undefined,
-        remarks: remarks.trim() || undefined,
-        openedAt: now,
-        createdBy: currentUser?.id,
-      };
-
-      const txId = await db.transactions.add(txData);
-
-      const itemRecords: TransactionItemRecord[] = cart.map(c => ({
-        transactionId: txId as number,
-        productId: c.product.id!,
-        productName: c.product.name,
-        quantity: c.qty,
-        price: c.product.price,
-        hpp: c.product.hpp,
-        discountType: c.discountType,
-        discountValue: c.discountValue,
-        discountAmount: getItemDiscountAmount(c),
-        subtotal: getItemSubtotal(c),
-        notes: c.notes,
-      }));
-      await db.transactionItems.bulkAdd(itemRecords);
-
-      for (const item of cart) {
-        if (!isStockManaged(item.product)) continue;
-        await supabase.from('products').update(productToRow({ stock: item.product.stock - item.qty })).eq('id', item.product.id);
-      }
-
+      const txId = (data as { id: number }).id;
+      const { data: txRow } = await supabase.from('transactions').select('*').eq('id', txId).maybeSingle();
+      savedTxObj = txRow ? mapTransactionRow(txRow) : null;
       toast.success(t('cashier.toast.billSaved', { receiptNumber }));
-
-      savedTxObj = { ...txData, id: txId as number };
-      savedItemsObj = itemRecords;
     }
 
     if (shouldPrintKitchen && savedTxObj) {
@@ -504,21 +461,20 @@ export default function Kasir() {
     setCartOpen(false);
   };
 
-  const loadOpenBill = async (tx: Transaction) => {
+  const loadOpenBill = async (tx: SupabaseTransaction) => {
     if (!tx.id) return;
-    const items = await db.transactionItems.where('transactionId').equals(tx.id).toArray();
-    const { data: productRows } = await supabase.from('products').select('*').eq('is_deleted', 0);
-    const allProducts = (productRows ?? []).map(mapProductRow);
+    const { data: itemRows } = await supabase.from('transaction_items').select('*').eq('transaction_id', tx.id);
+    const items = (itemRows ?? []).map(mapTransactionItemRow);
 
     const cartItems: CartItem[] = items.map(item => {
-      const product = allProducts.find(p => p.id === item.productId);
+      const product = products?.find(p => p.id === item.productId);
       if (!product) throw new Error(t('cashier.toast.productNotFoundLoadBill', { name: item.productName }));
       const isCustom = !!product.isCustomPrice;
       return {
         cartKey: isCustom ? crypto.randomUUID() : String(product.id),
         product: isCustom ? { ...product, name: item.productName, price: item.price } : product,
         qty: item.quantity,
-        discountType: item.discountType as 'percentage' | 'nominal' | null,
+        discountType: item.discountType,
         discountValue: item.discountValue,
         notes: item.notes,
       };
@@ -535,18 +491,13 @@ export default function Kasir() {
     setCartOpen(true);
   };
 
-  const cancelOpenBill = async (tx: Transaction) => {
+  const cancelOpenBill = async (tx: SupabaseTransaction) => {
     if (!tx.id) return;
-    const items = await db.transactionItems.where('transactionId').equals(tx.id).toArray();
-    for (const item of items) {
-      const { data: productRow } = await supabase.from('products').select('*').eq('id', item.productId).maybeSingle();
-      const product = productRow ? mapProductRow(productRow) : null;
-      if (product && isStockManaged(product)) {
-        await supabase.from('products').update(productToRow({ stock: product.stock + item.quantity })).eq('id', item.productId);
-      }
+    const { error } = await supabase.rpc('cancel_open_bill', { p_transaction_id: tx.id });
+    if (error) {
+      toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal membatalkan open bill' }));
+      return;
     }
-    await db.transactionItems.where('transactionId').equals(tx.id).delete();
-    await db.transactions.delete(tx.id);
     toast.success(t('cashier.toast.billCancelled', { receiptNumber: tx.receiptNumber }));
     setCancelDialogOpen(false);
     setCancelTargetTx(null);
@@ -564,7 +515,7 @@ export default function Kasir() {
     }
   };
 
-  const handleCancelFromList = (bill: Transaction) => {
+  const handleCancelFromList = (bill: SupabaseTransaction) => {
     setCancelTargetTx(bill);
     setCancelDialogOpen(true);
   };
@@ -590,150 +541,68 @@ export default function Kasir() {
       return;
     }
 
+    const cartPayload = buildCartPayload();
+    const debtPayload = debtAmount > 0 ? {
+      customerId, customerName: customerName.trim(),
+      originalAmount: debtAmount, remainingAmount: debtAmount,
+      status: checkoutPaidAmount > 0 ? 'partial' : 'unpaid',
+      dueDate: dueDate ? format(dueDate, 'yyyy-MM-dd') : null,
+    } : null;
+
     if (editingTxId) {
       // Update existing open bill → paid
-      const oldItems = await db.transactionItems.where('transactionId').equals(editingTxId).toArray();
-
-      await db.transactions.update(editingTxId, {
-        status: 'completed',
-        subtotal,
-        discountType: txDiscountType,
-        discountValue: Number(txDiscountValue) || 0,
-        discountAmount: txDiscountAmount,
-        total,
-        paymentMethodId: checkoutPaidAmount > 0 ? Number(paymentMethodId) : 0,
-        paymentAmount: checkoutPaidAmount,
-        change,
-        profit: totalProfit,
-        customerId,
-        customerName: customerName.trim() || undefined,
-        remarks: remarks.trim() || undefined,
-        closedAt: new Date(),
-        debtAmount,
+      const { error } = await supabase.rpc('checkout_update_open_bill', {
+        p_transaction_id: editingTxId,
+        p_transaction: {
+          status: 'completed',
+          subtotal, discountType: txDiscountType, discountValue: Number(txDiscountValue) || 0,
+          discountAmount: txDiscountAmount, total,
+          paymentMethodId: checkoutPaidAmount > 0 ? Number(paymentMethodId) : 0,
+          paymentAmount: checkoutPaidAmount, change, profit: totalProfit,
+          customerId, customerName: customerName.trim() || undefined,
+          remarks: remarks.trim() || undefined,
+          closedAt: new Date().toISOString(),
+          debtAmount,
+        },
+        p_cart: cartPayload,
+        p_debt: debtPayload,
       });
+      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
 
-      if (debtAmount > 0) {
-        await db.debts.add({
-          transactionId: editingTxId,
-          customerId: customerId!,
-          customerName: customerName.trim(),
-          originalAmount: debtAmount,
-          remainingAmount: debtAmount,
-          status: checkoutPaidAmount > 0 ? 'partial' : 'unpaid',
-          createdAt: new Date(),
-          settledAt: null,
-          dueDate,
-        });
-      }
-
-      await db.transactionItems.where('transactionId').equals(editingTxId).delete();
-      const itemRecords: TransactionItemRecord[] = cart.map(c => ({
-        transactionId: editingTxId,
-        productId: c.product.id!,
-        productName: c.product.name,
-        quantity: c.qty,
-        price: c.product.price,
-        hpp: c.product.hpp,
-        discountType: c.discountType,
-        discountValue: c.discountValue,
-        discountAmount: getItemDiscountAmount(c),
-        subtotal: getItemSubtotal(c),
-        notes: c.notes,
-      }));
-      await db.transactionItems.bulkAdd(itemRecords);
-
-      // Adjust stock deltas (same as saveOpenBill)
-      for (const cartItem of cart) {
-        if (!isStockManaged(cartItem.product)) continue;
-        const oldItem = oldItems.find(oi => oi.productId === cartItem.product.id);
-        const oldQty = oldItem?.quantity ?? 0;
-        const newQty = cartItem.qty;
-        const delta = newQty - oldQty;
-        if (delta !== 0) {
-          await supabase.from('products').update(productToRow({ stock: cartItem.product.stock - delta })).eq('id', cartItem.product.id);
-        }
-      }
-      for (const oldItem of oldItems) {
-        const stillInCart = cart.find(c => c.product.id === oldItem.productId);
-        if (!stillInCart) {
-          const { data: productRow } = await supabase.from('products').select('*').eq('id', oldItem.productId).maybeSingle();
-          const product = productRow ? mapProductRow(productRow) : null;
-          if (product && isStockManaged(product)) {
-            await supabase.from('products').update(productToRow({ stock: product.stock + oldItem.quantity })).eq('id', oldItem.productId);
-          }
-        }
-      }
-
-      const updatedTx = await db.transactions.get(editingTxId);
+      const { data: txRow } = await supabase.from('transactions').select('*').eq('id', editingTxId).maybeSingle();
+      const updatedTx = txRow ? mapTransactionRow(txRow) : null;
       toast.success(t('cashier.toast.transactionSuccess', { receiptNumber: updatedTx?.receiptNumber }));
       trackEvent('create_transaction');
-      setLastTransaction(updatedTx || null);
-      setLastTxItems(itemRecords);
+      setLastTransaction(updatedTx);
+      setLastTxItems(cartPayload.map((c, i) => ({ id: -1 - i, transactionId: editingTxId, ...c })));
       setLastDebtDueDate(debtAmount > 0 ? dueDate : undefined);
       setReceiptOpen(true);
     } else {
       const receiptNumber = `TX${Date.now()}`;
+      const { data, error } = await supabase.rpc('checkout_new', {
+        p_transaction: {
+          subtotal, discountType: txDiscountType, discountValue: Number(txDiscountValue) || 0,
+          discountAmount: txDiscountAmount, total,
+          paymentMethodId: checkoutPaidAmount > 0 ? Number(paymentMethodId) : 0,
+          paymentAmount: checkoutPaidAmount, change, profit: totalProfit,
+          date: new Date().toISOString(), receiptNumber, status: 'completed',
+          customerId, customerName: customerName.trim() || undefined,
+          remarks: remarks.trim() || undefined,
+          createdBy: currentUser?.id,
+          debtAmount,
+        },
+        p_cart: cartPayload,
+        p_debt: debtPayload,
+      });
+      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
 
-      const txData: Transaction = {
-        subtotal,
-        discountType: txDiscountType,
-        discountValue: Number(txDiscountValue) || 0,
-        discountAmount: txDiscountAmount,
-        total,
-        paymentMethodId: checkoutPaidAmount > 0 ? Number(paymentMethodId) : 0,
-        paymentAmount: checkoutPaidAmount,
-        change,
-        profit: totalProfit,
-        date: new Date(),
-        receiptNumber,
-        status: 'completed',
-        customerId,
-        customerName: customerName.trim() || undefined,
-        remarks: remarks.trim() || undefined,
-        createdBy: currentUser?.id,
-        debtAmount,
-      };
-
-      const txId = await db.transactions.add(txData);
-
-      if (debtAmount > 0) {
-        await db.debts.add({
-          transactionId: txId as number,
-          customerId: customerId!,
-          customerName: customerName.trim(),
-          originalAmount: debtAmount,
-          remainingAmount: debtAmount,
-          status: checkoutPaidAmount > 0 ? 'partial' : 'unpaid',
-          createdAt: new Date(),
-          settledAt: null,
-          dueDate,
-        });
-      }
-
-      const itemRecords: TransactionItemRecord[] = cart.map(c => ({
-        transactionId: txId as number,
-        productId: c.product.id!,
-        productName: c.product.name,
-        quantity: c.qty,
-        price: c.product.price,
-        hpp: c.product.hpp,
-        discountType: c.discountType,
-        discountValue: c.discountValue,
-        discountAmount: getItemDiscountAmount(c),
-        subtotal: getItemSubtotal(c),
-        notes: c.notes,
-      }));
-      await db.transactionItems.bulkAdd(itemRecords);
-
-      for (const item of cart) {
-        if (!isStockManaged(item.product)) continue;
-        await supabase.from('products').update(productToRow({ stock: item.product.stock - item.qty })).eq('id', item.product.id);
-      }
-
+      const txId = (data as { id: number }).id;
+      const { data: txRow } = await supabase.from('transactions').select('*').eq('id', txId).maybeSingle();
+      const newTx = txRow ? mapTransactionRow(txRow) : null;
       toast.success(t('cashier.toast.transactionSuccess', { receiptNumber }));
       trackEvent('create_transaction');
-      setLastTransaction({ ...txData, id: txId as number });
-      setLastTxItems(itemRecords);
+      setLastTransaction(newTx);
+      setLastTxItems(cartPayload.map((c, i) => ({ id: -1 - i, transactionId: txId, ...c })));
       setLastDebtDueDate(debtAmount > 0 ? dueDate : undefined);
       setReceiptOpen(true);
     }
@@ -1412,9 +1281,9 @@ export default function Kasir() {
                         variant="outline"
                         className="w-full h-8 text-xs border-primary/30 text-primary hover:bg-primary/5 flex items-center justify-center"
                         onClick={async () => {
-                          const items = await db.transactionItems.where('transactionId').equals(bill.id!).toArray();
+                          const { data } = await supabase.from('transaction_items').select('*').eq('transaction_id', bill.id);
                           setKitchenTicketTx(bill);
-                          setKitchenTicketItems(items);
+                          setKitchenTicketItems((data ?? []).map(mapTransactionItemRow));
                           setKitchenTicketOpen(true);
                         }}
                       >

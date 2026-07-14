@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
 import { format } from 'date-fns';
 import { id, enUS, ms } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
 import { ArrowLeft, Banknote, CalendarIcon, CheckCircle2, ChevronRight, CreditCard, Receipt, Search, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { db, type Debt } from '@/lib/db';
-import { supabase, mapPaymentMethodRow, type SupabasePaymentMethod } from '@/lib/supabase';
+import {
+  supabase,
+  mapPaymentMethodRow, type SupabasePaymentMethod,
+  mapDebtRow, type SupabaseDebt,
+  mapDebtPaymentRow, type SupabaseDebtPayment,
+  mapTransactionRow, type SupabaseTransaction,
+} from '@/lib/supabase';
 import { useAuth } from '@/hooks/use-auth';
 import LockedPage from '@/components/LockedPage';
 import { Badge } from '@/components/ui/badge';
@@ -39,29 +43,50 @@ export default function DebtsPage() {
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<DebtFilter>('active');
-  const [selectedDebt, setSelectedDebt] = useState<Debt | null>(null);
+  const [selectedDebt, setSelectedDebt] = useState<SupabaseDebt | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethodId, setPaymentMethodId] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const debts = useLiveQuery(() => db.debts.orderBy('createdAt').reverse().toArray());
-  const payments = useLiveQuery(() => db.debtPayments.orderBy('date').reverse().toArray());
-  const transactions = useLiveQuery(() => db.transactions.toArray());
+  const [debts, setDebts] = useState<SupabaseDebt[] | undefined>(undefined);
+  const [payments, setPayments] = useState<SupabaseDebtPayment[] | undefined>(undefined);
+  const [transactions, setTransactions] = useState<SupabaseTransaction[] | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
+    const loadDebts = async () => {
+      const { data, error } = await supabase.from('debts').select('*').order('created_at', { ascending: false });
+      if (active && !error && data) setDebts(data.map(mapDebtRow));
+      if (error) console.error('Gagal memuat hutang:', error);
+    };
+    const loadPayments = async () => {
+      const { data, error } = await supabase.from('debt_payments').select('*').order('date', { ascending: false });
+      if (active && !error && data) setPayments(data.map(mapDebtPaymentRow));
+      if (error) console.error('Gagal memuat cicilan:', error);
+    };
+    const loadTransactions = async () => {
+      const { data, error } = await supabase.from('transactions').select('*');
+      if (active && !error && data) setTransactions(data.map(mapTransactionRow));
+      if (error) console.error('Gagal memuat transaksi:', error);
+    };
     const loadPaymentMethods = async () => {
       const { data, error } = await supabase.from('payment_methods').select('*').order('name');
       if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
       if (error) console.error('Gagal memuat metode pembayaran:', error);
     };
+    loadDebts();
+    loadPayments();
+    loadTransactions();
     loadPaymentMethods();
 
     const channel = supabase
       .channel('debts-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debts' }, loadDebts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debt_payments' }, loadPayments)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, loadTransactions)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
       .subscribe();
 
@@ -105,7 +130,7 @@ export default function DebtsPage() {
   const getPaymentName = (id: number) =>
     paymentMethods?.find((method) => method.id === id)?.name ?? t('debts.deletedMethodFallback');
 
-  const openPayment = (debt: Debt) => {
+  const openPayment = (debt: SupabaseDebt) => {
     setSelectedDebt(debt);
     setPaymentAmount(String(debt.remainingAmount));
     setPaymentMethodId(paymentMethods?.[0]?.id?.toString() ?? '');
@@ -113,10 +138,11 @@ export default function DebtsPage() {
     setPaymentOpen(true);
   };
 
-  const updateDueDate = async (debt: Debt, dueDate: Date | undefined) => {
+  const updateDueDate = async (debt: SupabaseDebt, dueDate: Date | undefined) => {
     if (!debt.id) return;
-    await db.debts.update(debt.id, { dueDate });
-    setSelectedDebt({ ...debt, dueDate });
+    const dueDateStr = dueDate ? format(dueDate, 'yyyy-MM-dd') : null;
+    await supabase.from('debts').update({ due_date: dueDateStr, updated_at: new Date().toISOString() }).eq('id', debt.id);
+    setSelectedDebt({ ...debt, dueDate: dueDateStr ?? undefined });
   };
 
   const savePayment = async () => {
@@ -133,26 +159,24 @@ export default function DebtsPage() {
 
     setSaving(true);
     try {
-      const now = new Date();
-      const remainingAmount = selectedDebt.remainingAmount - amount;
-      await db.transaction('rw', db.debts, db.debtPayments, async () => {
-        await db.debtPayments.add({
-          debtId: selectedDebt.id!,
-          amount,
-          paymentMethodId: Number(paymentMethodId),
-          date: now,
-          notes: paymentNotes.trim() || undefined,
-          createdBy: currentUser?.id,
-        });
-        await db.debts.update(selectedDebt.id!, {
-          remainingAmount,
-          status: remainingAmount === 0 ? 'paid' : 'partial',
-          settledAt: remainingAmount === 0 ? now : null,
-        });
+      const { data, error } = await supabase.rpc('record_debt_payment', {
+        p_debt_id: selectedDebt.id,
+        p_amount: amount,
+        p_payment_method_id: Number(paymentMethodId),
+        p_notes: paymentNotes.trim(),
+        p_created_by: currentUser?.id ?? null,
       });
-      setSelectedDebt({ ...selectedDebt, remainingAmount, status: remainingAmount === 0 ? 'paid' : 'partial', settledAt: remainingAmount === 0 ? now : null });
+      if (error) throw error;
+
+      const result = data as { remainingAmount: number; status: 'unpaid' | 'partial' | 'paid' };
+      setSelectedDebt({
+        ...selectedDebt,
+        remainingAmount: result.remainingAmount,
+        status: result.status,
+        settledAt: result.remainingAmount === 0 ? new Date().toISOString() : null,
+      });
       setPaymentOpen(false);
-      toast.success(remainingAmount === 0 ? t('debts.toast.paidOff') : t('debts.toast.recorded'));
+      toast.success(result.remainingAmount === 0 ? t('debts.toast.paidOff') : t('debts.toast.recorded'));
     } catch {
       toast.error(t('debts.toast.failed'));
     } finally {

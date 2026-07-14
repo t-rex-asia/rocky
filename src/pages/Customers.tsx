@@ -1,6 +1,9 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
-import { supabase, mapCustomerRow, customerToRow, type SupabaseCustomer } from '@/lib/supabase';
+import {
+  supabase,
+  mapCustomerRow, customerToRow, type SupabaseCustomer,
+  mapDebtRow, type SupabaseDebt,
+  mapTransactionRow, type SupabaseTransaction,
+} from '@/lib/supabase';
 import { useEffect, useState } from 'react';
 import { Users as UsersIcon, Plus, Edit2, Trash2, Phone, MapPin, Mail, Search, Eye, Receipt as ReceiptIcon, ShoppingBag, HandCoins, ArrowLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -71,20 +74,40 @@ export default function CustomersPage() {
     };
   }, []);
 
-  const debts = useLiveQuery(() => db.debts.toArray());
+  const [debts, setDebts] = useState<SupabaseDebt[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { data, error } = await supabase.from('debts').select('*');
+      if (active && !error && data) setDebts(data.map(mapDebtRow));
+      if (error) console.error('Gagal memuat hutang:', error);
+    };
+    load();
+
+    const channel = supabase
+      .channel('customers-debts-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debts' }, load)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Transaksi pelanggan yang sedang dilihat, terbaru dulu.
-  // customerId tidak di-index, jadi pakai filter (dataset transaksi UMKM kecil).
-  const customerTx = useLiveQuery(
-    async () => {
-      if (!viewCustomer?.id) return [];
-      const all = await db.transactions
-        .filter((t) => t.customerId === viewCustomer.id)
-        .toArray();
-      return all.sort((a, b) => +new Date(b.date) - +new Date(a.date));
-    },
-    [viewCustomer?.id],
-  );
+  const [customerTx, setCustomerTx] = useState<SupabaseTransaction[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    if (!viewCustomer?.id) { setCustomerTx(undefined); return; }
+    supabase.from('transactions').select('*').eq('customer_id', viewCustomer.id).order('date', { ascending: false }).then(({ data, error }) => {
+      if (active && !error && data) setCustomerTx(data.map(mapTransactionRow));
+      if (error) console.error('Gagal memuat transaksi pelanggan:', error);
+    });
+    return () => { active = false; };
+  }, [viewCustomer?.id]);
 
   if (!can('manage_customers')) {
     return <LockedPage title={t('customers.locked.title')} permissionLabel={t('customers.locked.permissionLabel')} />;

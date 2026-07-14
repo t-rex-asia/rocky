@@ -28,23 +28,24 @@ export default function Pengaturan() {
   const { settings, updateSettings } = useStoreSettings();
   // deviceId adalah field lokal per-device (belum dan tidak akan dimigrasikan)
   const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
-  const activeDebts = useLiveQuery(() => db.debts.where('status').anyOf('unpaid', 'partial').toArray());
 
   const [paymentMethodsCount, setPaymentMethodsCount] = useState(0);
   const [categoriesCount, setCategoriesCount] = useState(0);
   const [unitsCount, setUnitsCount] = useState(0);
   const [expenseCategoriesCount, setExpenseCategoriesCount] = useState(0);
   const [usersCount, setUsersCount] = useState(0);
+  const [activeDebtsCount, setActiveDebtsCount] = useState(0);
 
   useEffect(() => {
     let active = true;
     const loadCounts = async () => {
-      const [pm, cat, un, ec, us] = await Promise.all([
+      const [pm, cat, un, ec, us, ad] = await Promise.all([
         supabase.from('payment_methods').select('id', { count: 'exact', head: true }),
         supabase.from('categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
         supabase.from('units').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
         supabase.from('expense_categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
         supabase.from('users_public').select('id', { count: 'exact', head: true }),
+        supabase.from('debts').select('id', { count: 'exact', head: true }).in('status', ['unpaid', 'partial']),
       ]);
       if (!active) return;
       setPaymentMethodsCount(pm.count ?? 0);
@@ -52,6 +53,7 @@ export default function Pengaturan() {
       setUnitsCount(un.count ?? 0);
       setExpenseCategoriesCount(ec.count ?? 0);
       setUsersCount(us.count ?? 0);
+      setActiveDebtsCount(ad.count ?? 0);
     };
     loadCounts();
 
@@ -61,6 +63,7 @@ export default function Pengaturan() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, loadCounts)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'units' }, loadCounts)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, loadCounts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debts' }, loadCounts)
       .subscribe();
 
     return () => {
@@ -401,7 +404,7 @@ export default function Pengaturan() {
                 <div className="w-9 h-9 rounded-lg bg-warning/10 text-warning flex items-center justify-center"><HandCoins className="w-4 h-4" /></div>
                 <div className="flex-1">
                   <p className="text-sm font-semibold">{t('transactionsAndStock.debts.title')}</p>
-                  <p className="text-[10px] text-muted-foreground">{t('transactionsAndStock.debts.description', { count: activeDebts?.length ?? 0 })}</p>
+                  <p className="text-[10px] text-muted-foreground">{t('transactionsAndStock.debts.description', { count: activeDebtsCount })}</p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </CardContent>

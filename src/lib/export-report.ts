@@ -3,9 +3,12 @@ import type * as ExcelJSTypes from 'exceljs';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
-import { db } from '@/lib/db';
-import type { Transaction, TransactionItemRecord, Expense } from '@/lib/db';
-import { supabase, mapPaymentMethodRow, mapExpenseCategoryRow, mapStoreSettingsRow, mapUserRow } from '@/lib/supabase';
+import {
+  supabase,
+  mapPaymentMethodRow, mapExpenseCategoryRow, mapStoreSettingsRow, mapUserRow,
+  mapTransactionRow, mapTransactionItemRow, mapExpenseRow, mapDebtPaymentRow,
+  type SupabaseTransaction as Transaction, type SupabaseTransactionItem as TransactionItemRecord, type SupabaseExpense as Expense,
+} from '@/lib/supabase';
 
 /**
  * Client-side Excel export untuk halaman Laporan.
@@ -82,11 +85,13 @@ export async function exportReportToExcel(rangeStart: Date, rangeEnd: Date): Pro
   const end = endOfDay(rangeEnd);
 
   // --- Ambil data ---
-  const [allTx, expensesRaw, debtPayments, paymentMethodRows, expenseCategoryRows, userRows, storeSettingsRow] =
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+  const [txRows, expenseRows, debtPaymentRows, paymentMethodRows, expenseCategoryRows, userRows, storeSettingsRow] =
     await Promise.all([
-      db.transactions.where('date').between(start, end, true, true).toArray(),
-      db.expenses.where('date').between(start, end, true, true).toArray(),
-      db.debtPayments.where('date').between(start, end, true, true).toArray(),
+      supabase.from('transactions').select('*').gte('date', startIso).lte('date', endIso).eq('status', 'completed').then(r => r.data ?? []),
+      supabase.from('expenses').select('*').gte('date', startIso).lte('date', endIso).eq('is_deleted', 0).then(r => r.data ?? []),
+      supabase.from('debt_payments').select('*').gte('date', startIso).lte('date', endIso).then(r => r.data ?? []),
       supabase.from('payment_methods').select('*').then(r => r.data ?? []),
       supabase.from('expense_categories').select('*').then(r => r.data ?? []),
       supabase.from('users_public').select('*').then(r => r.data ?? []),
@@ -95,20 +100,17 @@ export async function exportReportToExcel(rangeStart: Date, rangeEnd: Date): Pro
   const paymentMethods = paymentMethodRows.map(mapPaymentMethodRow);
   const expenseCategories = expenseCategoryRows.map(mapExpenseCategoryRow);
   const users = userRows.map(mapUserRow);
+  const debtPayments = debtPaymentRows.map(mapDebtPaymentRow);
   const storeSettings = storeSettingsRow ? mapStoreSettingsRow(storeSettingsRow) : undefined;
 
-  const transactions = allTx
-    .filter((t) => t.status === 'completed')
-    .sort((a, b) => +new Date(a.date) - +new Date(b.date));
-  const expenses = expensesRaw
-    .filter((e) => e.isDeleted === 0)
-    .sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const transactions = txRows.map(mapTransactionRow).sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  const expenses = expenseRows.map(mapExpenseRow).sort((a, b) => +new Date(a.date) - +new Date(b.date));
 
-  const txIds = transactions.map((t) => t.id!).filter(Boolean);
-  const items =
-    txIds.length > 0
-      ? await db.transactionItems.where('transactionId').anyOf(txIds).toArray()
-      : [];
+  const txIds = transactions.map((t) => t.id).filter(Boolean);
+  const { data: itemRows } = txIds.length > 0
+    ? await supabase.from('transaction_items').select('*').in('transaction_id', txIds)
+    : { data: [] };
+  const items = (itemRows ?? []).map(mapTransactionItemRow);
 
   // --- Lookup helpers ---
   const paymentName = (id?: number) =>

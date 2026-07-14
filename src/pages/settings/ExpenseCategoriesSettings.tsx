@@ -1,4 +1,3 @@
-import { db } from '@/lib/db';
 import { supabase, mapExpenseCategoryRow, expenseCategoryToRow, type SupabaseExpenseCategory } from '@/lib/supabase';
 import { useEffect, useState } from 'react';
 import { Wallet, Plus, Trash2, Edit2, ChevronLeft } from 'lucide-react';
@@ -76,8 +75,8 @@ export default function ExpenseCategoriesSettings() {
   };
   const deleteExpCat = async (cat: SupabaseExpenseCategory) => {
     if (!cat.id) return;
-    // expenses masih di Dexie lokal (belum dimigrasikan) — cek pemakaian lokal saja.
-    const usage = await db.expenses.where('categoryId').equals(cat.id).filter(e => e.isDeleted === 0).count();
+    const { count } = await supabase.from('expenses').select('id', { count: 'exact', head: true }).eq('category_id', cat.id).eq('is_deleted', 0);
+    const usage = count ?? 0;
     if (usage > 0) {
       toast.error(t('expenseCategory.toast.inUse', { count: usage }));
       return;

@@ -1,6 +1,10 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Transaction, type TransactionItemRecord } from '@/lib/db';
-import { supabase, mapProductRow, productToRow, mapPaymentMethodRow, type SupabasePaymentMethod, mapUserRow, type SupabaseUser } from '@/lib/supabase';
+import {
+  supabase,
+  mapPaymentMethodRow, type SupabasePaymentMethod,
+  mapUserRow, type SupabaseUser,
+  mapTransactionRow, mapTransactionItemRow, type SupabaseTransaction, type SupabaseTransactionItem,
+  mapDebtRow, type SupabaseDebt,
+} from '@/lib/supabase';
 import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useEffect } from 'react';
 import { format, startOfDay, endOfDay } from 'date-fns';
@@ -36,7 +40,7 @@ export default function TransactionHistory() {
   const [searchParams] = useSearchParams();
   const { can, multiUserEnabled } = useAuth();
   const [search, setSearch] = useState('');
-  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [selectedTx, setSelectedTx] = useState<SupabaseTransaction | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [dateFrom, setDateFrom] = useState<Date | undefined>(undefined);
@@ -46,37 +50,55 @@ export default function TransactionHistory() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'completed' | 'open'>('all');
   const [filterCashier, setFilterCashier] = useState<string>('all');
 
-  const transactions = useLiveQuery(() =>
-    db.transactions.orderBy('date').reverse().toArray()
-  );
-
-  // Query all transaction items and build lookup map
-  const txItemsMap = useLiveQuery(async () => {
-    const items = await db.transactionItems.toArray();
-    const map: Record<number, TransactionItemRecord[]> = {};
-    for (const item of items) {
-      if (!map[item.transactionId]) map[item.transactionId] = [];
-      map[item.transactionId].push(item);
-    }
-    return map;
-  });
-
-  const getTxItems = (txId: number | undefined): TransactionItemRecord[] =>
-    txId ? (txItemsMap?.[txId] ?? []) : [];
+  const [transactions, setTransactions] = useState<SupabaseTransaction[] | undefined>(undefined);
+  const [txItemsMap, setTxItemsMap] = useState<Record<number, SupabaseTransactionItem[]> | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
+  const [users, setUsers] = useState<SupabaseUser[] | undefined>(undefined);
+  const [debts, setDebts] = useState<SupabaseDebt[] | undefined>(undefined);
+
+  const getTxItems = (txId: number | undefined): SupabaseTransactionItem[] =>
+    txId ? (txItemsMap?.[txId] ?? []) : [];
 
   useEffect(() => {
     let active = true;
+    const loadTransactions = async () => {
+      const { data, error } = await supabase.from('transactions').select('*').order('date', { ascending: false });
+      if (active && !error && data) setTransactions(data.map(mapTransactionRow));
+      if (error) console.error('Gagal memuat transaksi:', error);
+    };
+    const loadTxItems = async () => {
+      const { data, error } = await supabase.from('transaction_items').select('*');
+      if (active && !error && data) {
+        const map: Record<number, SupabaseTransactionItem[]> = {};
+        for (const row of data.map(mapTransactionItemRow)) {
+          if (!map[row.transactionId]) map[row.transactionId] = [];
+          map[row.transactionId].push(row);
+        }
+        setTxItemsMap(map);
+      }
+      if (error) console.error('Gagal memuat item transaksi:', error);
+    };
     const loadPaymentMethods = async () => {
       const { data, error } = await supabase.from('payment_methods').select('*').order('name');
       if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
       if (error) console.error('Gagal memuat metode pembayaran:', error);
     };
+    const loadDebts = async () => {
+      const { data, error } = await supabase.from('debts').select('*');
+      if (active && !error && data) setDebts(data.map(mapDebtRow));
+      if (error) console.error('Gagal memuat hutang:', error);
+    };
+    loadTransactions();
+    loadTxItems();
     loadPaymentMethods();
+    loadDebts();
 
     const channel = supabase
       .channel('transaction-history-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, loadTransactions)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transaction_items' }, loadTxItems)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'debts' }, loadDebts)
       .subscribe();
 
     return () => {
@@ -86,8 +108,6 @@ export default function TransactionHistory() {
   }, []);
 
   const storeSettings = useMergedStoreSettings();
-  const [users, setUsers] = useState<SupabaseUser[] | undefined>(undefined);
-  const debts = useLiveQuery(() => db.debts.toArray());
 
   useEffect(() => {
     let active = true;
@@ -150,7 +170,7 @@ export default function TransactionHistory() {
   }) ?? [];
 
   // Group by date
-  const grouped = filtered.reduce<Record<string, Transaction[]>>((acc, tx) => {
+  const grouped = filtered.reduce<Record<string, SupabaseTransaction[]>>((acc, tx) => {
     const key = format(new Date(tx.date), 'yyyy-MM-dd');
     if (!acc[key]) acc[key] = [];
     acc[key].push(tx);
@@ -162,7 +182,7 @@ export default function TransactionHistory() {
   const filteredTotal = filtered.filter(t => t.status !== 'open').reduce((s, t) => s + t.total, 0);
   const hasDateFilter = dateFrom || dateTo;
 
-  const openDetail = (tx: Transaction) => {
+  const openDetail = (tx: SupabaseTransaction) => {
     setSelectedTx(tx);
     setDetailOpen(true);
   };
@@ -182,26 +202,18 @@ export default function TransactionHistory() {
     try {
       const debt = getDebt(selectedTx.id);
       if (debt?.id) {
-        const installmentCount = await db.debtPayments.where('debtId').equals(debt.id).count();
-        if (installmentCount > 0) {
+        const { count } = await supabase.from('debt_payments').select('id', { count: 'exact', head: true }).eq('debt_id', debt.id);
+        if ((count ?? 0) > 0) {
           toast.error(t('transactionHistory.toast.hasDebtPayments'));
           setDeleteDialogOpen(false);
           return;
         }
-        await db.debts.delete(debt.id);
       }
-      if (restoreStock) {
-        const items = getTxItems(selectedTx.id);
-        for (const item of items) {
-          const { data: productRow } = await supabase.from('products').select('*').eq('id', item.productId).maybeSingle();
-          if (productRow) {
-            const product = mapProductRow(productRow);
-            await supabase.from('products').update(productToRow({ stock: product.stock + item.quantity })).eq('id', item.productId);
-          }
-        }
-      }
-      await db.transactionItems.where('transactionId').equals(selectedTx.id).delete();
-      await db.transactions.delete(selectedTx.id);
+      const { error } = await supabase.rpc('delete_completed_transaction', {
+        p_transaction_id: selectedTx.id,
+        p_restore_stock: restoreStock,
+      });
+      if (error) throw error;
       setDeleteDialogOpen(false);
       setDetailOpen(false);
       setSelectedTx(null);
