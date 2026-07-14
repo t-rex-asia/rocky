@@ -28,28 +28,30 @@ export default function Pengaturan() {
   const { settings, updateSettings } = useStoreSettings();
   // deviceId adalah field lokal per-device (belum dan tidak akan dimigrasikan)
   const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
-  const usersCount = useLiveQuery(() => db.users.count());
   const activeDebts = useLiveQuery(() => db.debts.where('status').anyOf('unpaid', 'partial').toArray());
 
   const [paymentMethodsCount, setPaymentMethodsCount] = useState(0);
   const [categoriesCount, setCategoriesCount] = useState(0);
   const [unitsCount, setUnitsCount] = useState(0);
   const [expenseCategoriesCount, setExpenseCategoriesCount] = useState(0);
+  const [usersCount, setUsersCount] = useState(0);
 
   useEffect(() => {
     let active = true;
     const loadCounts = async () => {
-      const [pm, cat, un, ec] = await Promise.all([
+      const [pm, cat, un, ec, us] = await Promise.all([
         supabase.from('payment_methods').select('id', { count: 'exact', head: true }),
         supabase.from('categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
         supabase.from('units').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
         supabase.from('expense_categories').select('id', { count: 'exact', head: true }).eq('is_deleted', 0),
+        supabase.from('users_public').select('id', { count: 'exact', head: true }),
       ]);
       if (!active) return;
       setPaymentMethodsCount(pm.count ?? 0);
       setCategoriesCount(cat.count ?? 0);
       setUnitsCount(un.count ?? 0);
       setExpenseCategoriesCount(ec.count ?? 0);
+      setUsersCount(us.count ?? 0);
     };
     loadCounts();
 
@@ -207,10 +209,10 @@ export default function Pengaturan() {
     setActivating(true);
     try {
       // Check if owner already exists (idempotent — safety net)
-      const existingOwner = await db.users.where('role').equals('owner').first();
-      let ownerId = existingOwner?.id;
+      const { data: existingOwnerRow } = await supabase.from('users_public').select('id').eq('role', 'owner').maybeSingle();
+      let ownerId = existingOwnerRow?.id as number | undefined;
 
-      if (!existingOwner) {
+      if (!existingOwnerRow) {
         const result = await createUser({
           username: actUsername,
           pin: actPin,
@@ -229,8 +231,8 @@ export default function Pengaturan() {
       await updateSettings({ multiUserEnabled: true });
 
       // Persist session for the owner so they stay logged in immediately
-      if (ownerId && localSettings?.deviceId) {
-        saveSession(ownerId, localSettings.deviceId);
+      if (ownerId) {
+        saveSession(ownerId);
       }
 
       toast.success(t('toast.multiUserEnabled'));

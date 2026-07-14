@@ -363,3 +363,35 @@ export function expenseCategoryToRow(data: Partial<Omit<SupabaseExpenseCategory,
   row.updated_at = new Date().toISOString();
   return row;
 }
+
+// --- users (staff PIN login) -------------------------------------------------
+// Tabel `users` di Postgres tidak boleh dibaca langsung (RLS tanpa policy,
+// menyimpan pin_hash) — hanya lewat view `users_public` (kolom aman) dan
+// fungsi RPC security-definer (verify_staff_pin, create_staff_user, dst).
+// pin_hash TIDAK PERNAH ada di tipe/mapper ini, sesuai desain.
+
+export interface SupabaseUser {
+  id: number;
+  username: string;
+  name: string;
+  role: 'owner' | 'staff';
+  permissions: string[];
+  isActive: number;
+  createdAt: string;
+  lastLoginAt: string | null;
+  updatedAt: string;
+}
+
+export function mapUserRow(row: Record<string, unknown>): SupabaseUser {
+  return {
+    id: row.id as number,
+    username: row.username as string,
+    name: row.name as string,
+    role: row.role as 'owner' | 'staff',
+    permissions: (row.permissions as string[] | null) ?? [],
+    isActive: row.is_active as number,
+    createdAt: row.created_at as string,
+    lastLoginAt: (row.last_login_at as string | null) ?? null,
+    updatedAt: row.updated_at as string,
+  };
+}

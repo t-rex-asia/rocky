@@ -6,6 +6,7 @@ import {
   mapCategoryRow, type SupabaseCategory,
   mapPaymentMethodRow, type SupabasePaymentMethod,
   mapCustomerRow, type SupabaseCustomer,
+  mapUserRow, type SupabaseUser,
 } from '@/lib/supabase';
 import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useRef, useEffect } from 'react';
@@ -176,7 +177,15 @@ export default function Kasir() {
   }, []);
 
   const openBills = useLiveQuery(() => db.transactions.where('status').equals('open').reverse().sortBy('date'));
-  const allUsers = useLiveQuery(() => db.users.toArray());
+  const [allUsers, setAllUsers] = useState<SupabaseUser[] | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    supabase.from('users_public').select('*').then(({ data, error }) => {
+      if (active && !error && data) setAllUsers(data.map(mapUserRow));
+    });
+    return () => { active = false; };
+  }, []);
 
   // Permission gate — kept render-side (not redirect) so the bottom nav stays
   // intact. All hooks above run unconditionally; we just swap the rendered tree.

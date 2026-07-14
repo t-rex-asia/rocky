@@ -5,7 +5,7 @@ import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { db } from '@/lib/db';
 import type { Transaction, TransactionItemRecord, Expense } from '@/lib/db';
-import { supabase, mapPaymentMethodRow, mapExpenseCategoryRow, mapStoreSettingsRow } from '@/lib/supabase';
+import { supabase, mapPaymentMethodRow, mapExpenseCategoryRow, mapStoreSettingsRow, mapUserRow } from '@/lib/supabase';
 
 /**
  * Client-side Excel export untuk halaman Laporan.
@@ -82,18 +82,19 @@ export async function exportReportToExcel(rangeStart: Date, rangeEnd: Date): Pro
   const end = endOfDay(rangeEnd);
 
   // --- Ambil data ---
-  const [allTx, expensesRaw, debtPayments, paymentMethodRows, expenseCategoryRows, users, storeSettingsRow] =
+  const [allTx, expensesRaw, debtPayments, paymentMethodRows, expenseCategoryRows, userRows, storeSettingsRow] =
     await Promise.all([
       db.transactions.where('date').between(start, end, true, true).toArray(),
       db.expenses.where('date').between(start, end, true, true).toArray(),
       db.debtPayments.where('date').between(start, end, true, true).toArray(),
       supabase.from('payment_methods').select('*').then(r => r.data ?? []),
       supabase.from('expense_categories').select('*').then(r => r.data ?? []),
-      db.users.toArray(),
+      supabase.from('users_public').select('*').then(r => r.data ?? []),
       supabase.from('store_settings').select('*').eq('id', 1).maybeSingle().then(r => r.data),
     ]);
   const paymentMethods = paymentMethodRows.map(mapPaymentMethodRow);
   const expenseCategories = expenseCategoryRows.map(mapExpenseCategoryRow);
+  const users = userRows.map(mapUserRow);
   const storeSettings = storeSettingsRow ? mapStoreSettingsRow(storeSettingsRow) : undefined;
 
   const transactions = allTx

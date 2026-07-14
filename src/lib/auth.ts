@@ -1,17 +1,5 @@
-import { db, type User, type PermissionKey, ALL_PERMISSIONS } from './db';
-
-// === PIN hashing (SHA-256, hex) ===
-// Note: client-only PWA — this is *obfuscation*, not military-grade security.
-// Anyone with device access could open IndexedDB. The goal is to prevent a
-// nosy karyawan from seeing each other's PIN, not protect against a forensic
-// attacker. We salt with a per-store deviceId to avoid rainbow lookups.
-export async function hashPin(pin: string, deviceId: string): Promise<string> {
-  const data = new TextEncoder().encode(`${deviceId}:${pin}`);
-  const hash = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+import { type PermissionKey, ALL_PERMISSIONS } from './db';
+import { supabase, mapUserRow, type SupabaseUser } from './supabase';
 
 export function isValidPin(pin: string): boolean {
   return /^\d{4,6}$/.test(pin);
@@ -81,22 +69,25 @@ export const PERMISSION_LABELS: Record<PermissionKey, { title: string; desc: str
 export const DEFAULT_STAFF_PERMISSIONS: PermissionKey[] = ['create_transaction'];
 
 // Owner implicitly has every permission. This helper centralizes the check.
-export function hasPermission(user: User | null, key: PermissionKey): boolean {
+export function hasPermission(user: SupabaseUser | null, key: PermissionKey): boolean {
   if (!user) return false;
   if (user.role === 'owner') return true;
   return user.permissions.includes(key);
 }
 
 // Owner-only: managing other users.
-export function canManageUsers(user: User | null): boolean {
+export function canManageUsers(user: SupabaseUser | null): boolean {
   return user?.role === 'owner';
 }
 
 // === Login ===
+// Verifikasi PIN dilakukan server-side lewat RPC `verify_staff_pin` — pin_hash
+// tidak pernah dikirim ke client, dan hashing (bcrypt/pgcrypto) juga terjadi
+// di server. Lihat SQL Batch B untuk definisi fungsinya.
 
 export interface LoginResult {
   ok: boolean;
-  user?: User;
+  user?: SupabaseUser;
   error?: string;
 }
 
@@ -104,33 +95,26 @@ export async function login(username: string, pin: string): Promise<LoginResult>
   const trimmed = username.trim().toLowerCase();
   if (!trimmed || !pin) return { ok: false, error: 'Username dan PIN wajib diisi' };
 
-  const settings = await db.storeSettings.toCollection().first();
-  if (!settings?.deviceId) return { ok: false, error: 'Pengaturan toko belum siap' };
+  const { data, error } = await supabase.rpc('verify_staff_pin', { p_username: trimmed, p_pin: pin });
+  if (error) return { ok: false, error: 'Gagal menghubungi server, coba lagi' };
+  if (!data) return { ok: false, error: 'Username atau PIN salah' };
 
-  const user = await db.users.where('username').equals(trimmed).first();
-  if (!user) return { ok: false, error: 'Username atau PIN salah' };
-  if (!user.isActive) return { ok: false, error: 'Akun ini dinonaktifkan' };
-
-  const hash = await hashPin(pin, settings.deviceId);
-  if (hash !== user.pinHash) return { ok: false, error: 'Username atau PIN salah' };
-
-  // Update lastLoginAt (best-effort, non-blocking semantics OK)
-  await db.users.update(user.id!, { lastLoginAt: new Date() });
-
-  return { ok: true, user: { ...user, lastLoginAt: new Date() } };
+  return { ok: true, user: mapUserRow(data as Record<string, unknown>) };
 }
 
 // === Session persistence (localStorage) ===
+// Disederhanakan jadi userId saja — gerbang device-level sekarang login
+// Supabase (SupabaseLoginGate), jadi binding ke deviceId lokal sudah tidak
+// relevan untuk sesi PIN staff.
 
-const SESSION_KEY = 'kasirgratisan_session_v1';
+const SESSION_KEY = 'kasirgratisan_session_v2';
 
 interface StoredSession {
   userId: number;
-  deviceId: string; // bind session to device — invalidate if storage moved
 }
 
-export function saveSession(userId: number, deviceId: string): void {
-  const data: StoredSession = { userId, deviceId };
+export function saveSession(userId: number): void {
+  const data: StoredSession = { userId };
   try {
     localStorage.setItem(SESSION_KEY, JSON.stringify(data));
   } catch {
@@ -146,22 +130,20 @@ export function clearSession(): void {
   }
 }
 
-export async function restoreSession(): Promise<User | null> {
+export async function restoreSession(): Promise<SupabaseUser | null> {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw) as StoredSession;
-    if (!data?.userId || !data?.deviceId) return null;
+    if (!data?.userId) return null;
 
-    const settings = await db.storeSettings.toCollection().first();
-    if (!settings?.deviceId || settings.deviceId !== data.deviceId) {
-      // Device changed (e.g. import/restore from backup) — force re-login
+    const { data: row, error } = await supabase.from('users_public').select('*').eq('id', data.userId).maybeSingle();
+    if (error || !row) {
       clearSession();
       return null;
     }
-
-    const user = await db.users.get(data.userId);
-    if (!user || !user.isActive) {
+    const user = mapUserRow(row);
+    if (!user.isActive) {
       clearSession();
       return null;
     }
@@ -192,32 +174,27 @@ export async function createUser(input: {
     return { ok: false, error: 'Nama tidak boleh kosong' };
   }
 
-  const settings = await db.storeSettings.toCollection().first();
-  if (!settings?.deviceId) return { ok: false, error: 'Pengaturan toko belum siap' };
-
-  const existing = await db.users.where('username').equals(username).first();
-  if (existing) return { ok: false, error: `Username "${username}" sudah dipakai` };
-
-  const pinHash = await hashPin(input.pin, settings.deviceId);
-  const userId = await db.users.add({
-    username,
-    pinHash,
-    name: input.name.trim(),
-    role: input.role,
-    permissions: input.role === 'owner' ? [] : input.permissions,
-    isActive: 1,
-    createdAt: new Date(),
-    lastLoginAt: null,
+  const { data, error } = await supabase.rpc('create_staff_user', {
+    p_username: username,
+    p_pin: input.pin,
+    p_name: input.name.trim(),
+    p_role: input.role,
+    p_permissions: input.role === 'owner' ? [] : input.permissions,
   });
 
-  return { ok: true, userId: userId as number };
+  if (error) {
+    if (error.message?.includes('username_taken')) {
+      return { ok: false, error: `Username "${username}" sudah dipakai` };
+    }
+    return { ok: false, error: 'Gagal membuat akun, coba lagi' };
+  }
+
+  return { ok: true, userId: (data as { id: number }).id };
 }
 
 export async function updateUserPin(userId: number, newPin: string): Promise<{ ok: boolean; error?: string }> {
   if (!isValidPin(newPin)) return { ok: false, error: 'PIN harus 4-6 digit angka' };
-  const settings = await db.storeSettings.toCollection().first();
-  if (!settings?.deviceId) return { ok: false, error: 'Pengaturan toko belum siap' };
-  const pinHash = await hashPin(newPin, settings.deviceId);
-  await db.users.update(userId, { pinHash });
+  const { error } = await supabase.rpc('update_staff_pin', { p_user_id: userId, p_new_pin: newPin });
+  if (error) return { ok: false, error: 'Gagal mengubah PIN, coba lagi' };
   return { ok: true };
 }

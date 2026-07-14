@@ -94,12 +94,12 @@ const App = () => {
             <Toaster />
             <Sonner />
             <BrowserRouter basename={import.meta.env.BASE_URL}>
-              <AuthProvider>
                <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
                 <CloudAuthProvider>
                 <SupabaseAuthProvider>
                 <SupabaseLoginGate>
                 <StoreSettingsProvider>
+                <AuthProvider>
                 <AnalyticsTracker />
               <Routes>
                 <Route element={<AppLayout />}>
@@ -330,12 +330,12 @@ const App = () => {
                 </Route>
                 <Route path="*" element={<NotFound />} />
               </Routes>
+              </AuthProvider>
               </StoreSettingsProvider>
               </SupabaseLoginGate>
               </SupabaseAuthProvider>
               </CloudAuthProvider>
              </GoogleOAuthProvider>
-            </AuthProvider>
           </BrowserRouter>
         </TooltipProvider>
       </QueryClientProvider>

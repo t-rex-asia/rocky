@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Transaction, type TransactionItemRecord } from '@/lib/db';
-import { supabase, mapProductRow, productToRow, mapPaymentMethodRow, type SupabasePaymentMethod } from '@/lib/supabase';
+import { supabase, mapProductRow, productToRow, mapPaymentMethodRow, type SupabasePaymentMethod, mapUserRow, type SupabaseUser } from '@/lib/supabase';
 import { useMergedStoreSettings } from '@/hooks/use-store-settings';
 import { useState, useEffect } from 'react';
 import { format, startOfDay, endOfDay } from 'date-fns';
@@ -86,8 +86,16 @@ export default function TransactionHistory() {
   }, []);
 
   const storeSettings = useMergedStoreSettings();
-  const users = useLiveQuery(() => db.users.toArray());
+  const [users, setUsers] = useState<SupabaseUser[] | undefined>(undefined);
   const debts = useLiveQuery(() => db.debts.toArray());
+
+  useEffect(() => {
+    let active = true;
+    supabase.from('users_public').select('*').then(({ data, error }) => {
+      if (active && !error && data) setUsers(data.map(mapUserRow));
+    });
+    return () => { active = false; };
+  }, []);
 
   const userById = (uid?: number) => (uid ? users?.find((u) => u.id === uid) : undefined);
   const cashierName = (uid?: number) => userById(uid)?.name ?? '—';

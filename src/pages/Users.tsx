@@ -1,6 +1,6 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type User, ALL_PERMISSIONS } from '@/lib/db';
-import { useState } from 'react';
+import { ALL_PERMISSIONS } from '@/lib/db';
+import { supabase, mapUserRow, type SupabaseUser } from '@/lib/supabase';
+import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import { id as idLocale, enUS, ms } from 'date-fns/locale';
 import type { Locale } from 'date-fns';
@@ -19,7 +19,6 @@ import { useAuth } from '@/hooks/use-auth';
 import {
   createUser,
   updateUserPin,
-  hashPin,
   isValidPin,
   isValidUsername,
   PERMISSION_LABELS,
@@ -35,11 +34,21 @@ export default function UsersPage() {
   const { currentUser, isOwner, multiUserEnabled, refresh } = useAuth();
   const { t, i18n } = useTranslation('settings');
   const dateLocale = LOCALES[i18n.language] ?? idLocale;
-  const users = useLiveQuery(() => db.users.toArray());
+  const [users, setUsers] = useState<SupabaseUser[] | undefined>(undefined);
+
+  const loadUsers = useCallback(async () => {
+    const { data, error } = await supabase.from('users_public').select('*');
+    if (!error && data) setUsers(data.map(mapUserRow));
+    if (error) console.error('Gagal memuat daftar staff:', error);
+  }, []);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   // Add/edit dialog
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<User | null>(null);
+  const [editing, setEditing] = useState<SupabaseUser | null>(null);
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
   const [pin, setPin] = useState('');
@@ -48,11 +57,11 @@ export default function UsersPage() {
 
   // Reset PIN dialog
   const [pinDialogOpen, setPinDialogOpen] = useState(false);
-  const [pinTarget, setPinTarget] = useState<User | null>(null);
+  const [pinTarget, setPinTarget] = useState<SupabaseUser | null>(null);
   const [newPin, setNewPin] = useState('');
 
   // Delete confirmation
-  const [deleteTarget, setDeleteTarget] = useState<User | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SupabaseUser | null>(null);
 
   if (!multiUserEnabled) {
     return (
@@ -109,12 +118,12 @@ export default function UsersPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (user: User) => {
+  const openEdit = (user: SupabaseUser) => {
     setEditing(user);
     setName(user.name);
     setUsername(user.username);
     setPin('');
-    setPermissions(user.role === 'owner' ? [...ALL_PERMISSIONS] : user.permissions);
+    setPermissions(user.role === 'owner' ? [...ALL_PERMISSIONS] : (user.permissions as PermissionKey[]));
     setDialogOpen(true);
   };
 
@@ -131,11 +140,18 @@ export default function UsersPage() {
           toast.error(t('users.toast.nameRequired'));
           return;
         }
-        await db.users.update(editing.id!, {
-          name: name.trim(),
-          permissions: editing.role === 'owner' ? [] : permissions,
+        const { error } = await supabase.rpc('update_staff_user', {
+          p_user_id: editing.id,
+          p_name: name.trim(),
+          p_permissions: editing.role === 'owner' ? [] : permissions,
+          p_is_active: null,
         });
+        if (error) {
+          toast.error(t('users.toast.createFailed'));
+          return;
+        }
         toast.success(t('users.toast.staffUpdated'));
+        await loadUsers();
         if (currentUser?.id === editing.id) await refresh();
       } else {
         // Create new staff
@@ -163,6 +179,7 @@ export default function UsersPage() {
           return;
         }
         toast.success(t('users.toast.staffCreated', { name: name.trim() }));
+        await loadUsers();
       }
       setDialogOpen(false);
     } finally {
@@ -170,7 +187,7 @@ export default function UsersPage() {
     }
   };
 
-  const openPinReset = (user: User) => {
+  const openPinReset = (user: SupabaseUser) => {
     setPinTarget(user);
     setNewPin('');
     setPinDialogOpen(true);
@@ -191,7 +208,7 @@ export default function UsersPage() {
     setPinDialogOpen(false);
   };
 
-  const toggleActive = async (user: User) => {
+  const toggleActive = async (user: SupabaseUser) => {
     if (user.id === currentUser?.id) {
       toast.error(t('users.toast.cannotSelfDisable'));
       return;
@@ -203,8 +220,18 @@ export default function UsersPage() {
         return;
       }
     }
-    await db.users.update(user.id!, { isActive: user.isActive === 1 ? 0 : 1 });
+    const { error } = await supabase.rpc('update_staff_user', {
+      p_user_id: user.id,
+      p_name: null,
+      p_permissions: null,
+      p_is_active: user.isActive === 1 ? 0 : 1,
+    });
+    if (error) {
+      toast.error(t('users.toast.createFailed'));
+      return;
+    }
     toast.success(user.isActive === 1 ? t('users.toast.accountDisabled') : t('users.toast.accountEnabled'));
+    await loadUsers();
   };
 
   const handleDelete = async () => {
@@ -222,9 +249,15 @@ export default function UsersPage() {
         return;
       }
     }
-    await db.users.delete(deleteTarget.id);
+    const { error } = await supabase.rpc('delete_staff_user', { p_user_id: deleteTarget.id });
+    if (error) {
+      toast.error(t('users.toast.createFailed'));
+      setDeleteTarget(null);
+      return;
+    }
     toast.success(t('users.toast.accountDeleted', { name: deleteTarget.name }));
     setDeleteTarget(null);
+    await loadUsers();
   };
 
   const sortedUsers = (users ?? []).slice().sort((a, b) => {

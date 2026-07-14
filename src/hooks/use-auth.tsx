@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type User, type PermissionKey } from '@/lib/db';
+import type { PermissionKey } from '@/lib/db';
+import { supabase, mapUserRow, type SupabaseUser } from '@/lib/supabase';
+import { useStoreSettings } from '@/hooks/use-store-settings';
 import {
   hasPermission as checkPermission,
   restoreSession,
@@ -17,7 +18,7 @@ interface AuthContextValue {
   // Whether we're still loading session/settings on first paint.
   loading: boolean;
   // Logged-in user, or null when in legacy mode or not yet logged in.
-  currentUser: User | null;
+  currentUser: SupabaseUser | null;
   // Permission check: returns true in legacy mode, otherwise checks user perms.
   can: (key: PermissionKey) => boolean;
   // Owner-only flag (manage users, toggle multi-user, etc.)
@@ -30,9 +31,14 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Interval untuk mengecek ulang status user yang sedang login (deteksi akun
+// dinonaktifkan dari device lain). Bukan realtime (users_public adalah view,
+// Supabase Realtime tidak mendukung view) — cukup polling ringan.
+const REFRESH_INTERVAL_MS = 60_000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const storeSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const { settings: storeSettings, loading: storeSettingsLoading } = useStoreSettings();
+  const [currentUser, setCurrentUser] = useState<SupabaseUser | null>(null);
   const [sessionRestored, setSessionRestored] = useState(false);
 
   const multiUserEnabled = !!storeSettings?.multiUserEnabled;
@@ -52,38 +58,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Live-refresh the in-memory user when their row changes (permission edit etc.).
-  // We bind to the DB row by id so updates from User Management page propagate.
+  const refresh = useCallback(async () => {
+    if (!currentUser?.id) return;
+    const { data, error } = await supabase.from('users_public').select('*').eq('id', currentUser.id).maybeSingle();
+    if (error || !data) return;
+    const fresh = mapUserRow(data);
+    if (!fresh.isActive) {
+      clearStoredSession();
+      setCurrentUser(null);
+      return;
+    }
+    setCurrentUser(fresh);
+  }, [currentUser?.id]);
+
+  // Periodically re-check the logged-in user's status (deactivation/permission changes).
   useEffect(() => {
     if (!currentUser?.id) return;
-    const id = currentUser.id;
-    const sub = db.users.hook('updating', (mods, primKey) => {
-      if (primKey === id) {
-        // Defer so the update is committed first, then re-read.
-        queueMicrotask(async () => {
-          const fresh = await db.users.get(id);
-          if (!fresh || !fresh.isActive) {
-            // Account deactivated → kick out
-            clearStoredSession();
-            setCurrentUser(null);
-            return;
-          }
-          setCurrentUser(fresh);
-        });
-      }
-    });
+    const interval = setInterval(refresh, REFRESH_INTERVAL_MS);
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
     return () => {
-      db.users.hook('updating').unsubscribe(sub);
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, refresh]);
 
   const login = useCallback(async (username: string, pin: string): Promise<LoginResult> => {
     const result = await authLogin(username, pin);
     if (result.ok && result.user?.id) {
-      const settings = await db.storeSettings.toCollection().first();
-      if (settings?.deviceId) {
-        persistSession(result.user.id, settings.deviceId);
-      }
+      persistSession(result.user.id);
       setCurrentUser(result.user);
     }
     return result;
@@ -93,17 +96,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     clearStoredSession();
     setCurrentUser(null);
   }, []);
-
-  const refresh = useCallback(async () => {
-    if (!currentUser?.id) return;
-    const fresh = await db.users.get(currentUser.id);
-    if (!fresh || !fresh.isActive) {
-      clearStoredSession();
-      setCurrentUser(null);
-      return;
-    }
-    setCurrentUser(fresh);
-  }, [currentUser?.id]);
 
   const can = useCallback(
     (key: PermissionKey): boolean => {
@@ -117,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isOwner = !multiUserEnabled || currentUser?.role === 'owner';
 
   // Loading: still waiting on storeSettings or first session restore attempt.
-  const loading = storeSettings === undefined || !sessionRestored;
+  const loading = storeSettingsLoading || !sessionRestored;
 
   const value: AuthContextValue = {
     multiUserEnabled,
