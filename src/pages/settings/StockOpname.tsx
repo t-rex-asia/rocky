@@ -1,7 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type StockOpname, type StockOpnameItem, type Product } from '@/lib/db';
+import {
+  supabase,
+  mapProductRow, type SupabaseProduct,
+  mapStockOpnameRow, type SupabaseStockOpname,
+  mapStockOpnameItemRow, type SupabaseStockOpnameItem,
+} from '@/lib/supabase';
 import { ClipboardCheck, ChevronLeft, Plus, Download, Upload, Search, Trash2, ArrowLeft, Check, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,7 +40,7 @@ export default function StockOpnamePage() {
   const dateLocale = DATE_LOCALES[i18n.language] ?? localeId;
 
   // Active Draft state
-  const [activeOpname, setActiveOpname] = useState<StockOpname | null>(null);
+  const [activeOpname, setActiveOpname] = useState<SupabaseStockOpname | null>(null);
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [notes, setNotes] = useState('');
@@ -45,26 +49,53 @@ export default function StockOpnamePage() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [historyDetailOpen, setHistoryDetailOpen] = useState(false);
-  const [selectedHistory, setSelectedHistory] = useState<StockOpname | null>(null);
-  const [selectedHistoryItems, setSelectedHistoryItems] = useState<(StockOpnameItem & { productName: string; sku: string; unit: string })[]>([]);
+  const [selectedHistory, setSelectedHistory] = useState<SupabaseStockOpname | null>(null);
+  const [selectedHistoryItems, setSelectedHistoryItems] = useState<(SupabaseStockOpnameItem & { productName: string; sku: string; unit: string })[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load data from DB
-  const products = useLiveQuery(() => db.products.where('isDeleted').equals(0).toArray());
-  const opnameHistory = useLiveQuery(() => db.stockOpnames.orderBy('date').reverse().toArray());
+  // Load data from Supabase
+  const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
+  const [opnameHistory, setOpnameHistory] = useState<SupabaseStockOpname[] | undefined>(undefined);
 
-  // Fetch active draft opname on mount
+  const loadProducts = useCallback(async () => {
+    const { data, error } = await supabase.from('products').select('*').eq('is_deleted', 0).order('name');
+    if (!error && data) setProducts(data.map(mapProductRow));
+    if (error) console.error('Gagal memuat produk:', error);
+  }, []);
+
+  const loadOpnameHistory = useCallback(async () => {
+    const { data, error } = await supabase.from('stock_opnames').select('*').order('date', { ascending: false });
+    if (!error && data) setOpnameHistory(data.map(mapStockOpnameRow));
+    if (error) console.error('Gagal memuat riwayat stock opname:', error);
+  }, []);
+
+  useEffect(() => {
+    loadProducts();
+    loadOpnameHistory();
+
+    const channel = supabase
+      .channel('stock-opname-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_opnames' }, loadOpnameHistory)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadProducts, loadOpnameHistory]);
+
+  // Fetch active draft opname on mount / when products load
   useEffect(() => {
     const loadActiveDraft = async () => {
-      const draft = await db.stockOpnames.where('status').equals('draft').first();
-      if (draft) {
+      const { data: draftRow } = await supabase.from('stock_opnames').select('*').eq('status', 'draft').maybeSingle();
+      if (draftRow) {
+        const draft = mapStockOpnameRow(draftRow);
         setActiveOpname(draft);
         setNotes(draft.notes ?? '');
-        // Load its items
-        const items = await db.stockOpnameItems.where('opnameId').equals(draft.id!).toArray();
-        const prodList = await db.products.toArray();
-        const prodMap = new Map(prodList.map(p => [p.id, p]));
+        const { data: itemRows } = await supabase.from('stock_opname_items').select('*').eq('opname_id', draft.id);
+        const items = (itemRows ?? []).map(mapStockOpnameItemRow);
+        const prodMap = new Map((products ?? []).map(p => [p.id, p]));
 
         const loadedDraftItems = items.map(item => {
           const p = prodMap.get(item.productId);
@@ -84,7 +115,7 @@ export default function StockOpnamePage() {
         setDraftItems([]);
       }
     };
-    loadActiveDraft();
+    if (products) loadActiveDraft();
   }, [products]);
 
   if (!can('manage_stock_inout')) {
@@ -110,28 +141,30 @@ export default function StockOpnamePage() {
       }
 
       // Create main draft record
-      const opnameId = await db.stockOpnames.add({
-        date: new Date(),
-        status: 'draft',
-        notes: '',
-        createdBy: currentUser?.id
-      });
+      const { data: opnameRow, error: opnameError } = await supabase
+        .from('stock_opnames')
+        .insert({ date: new Date().toISOString(), status: 'draft', notes: '', created_by: currentUser?.id ?? null })
+        .select()
+        .single();
+      if (opnameError || !opnameRow) throw opnameError;
+      const opname = mapStockOpnameRow(opnameRow);
 
       // Map products to opname items
       const itemsToAdd = activeProducts.map(p => ({
-        opnameId,
-        productId: p.id!,
-        systemStock: p.stock,
-        realStock: p.stock, // initialize physical stock to system stock
+        opname_id: opname.id,
+        product_id: p.id,
+        system_stock: p.stock,
+        real_stock: p.stock, // initialize physical stock to system stock
         difference: 0
       }));
 
-      await db.stockOpnameItems.bulkAdd(itemsToAdd);
+      const { error: itemsError } = await supabase.from('stock_opname_items').insert(itemsToAdd);
+      if (itemsError) throw itemsError;
 
-      setActiveOpname({ id: opnameId, date: new Date(), status: 'draft', notes: '' });
+      setActiveOpname(opname);
       setNotes('');
       setDraftItems(activeProducts.map(p => ({
-        productId: p.id!,
+        productId: p.id,
         productName: p.name,
         sku: p.sku,
         barcode: p.barcode ?? '',
@@ -160,18 +193,15 @@ export default function StockOpnamePage() {
       return item;
     }));
 
-    // Update IndexedDB
+    // Persist to Supabase
     if (activeOpname?.id) {
-      const item = await db.stockOpnameItems
-        .where('[opnameId+productId]')
-        .equals([activeOpname.id, productId])
-        .first();
-
-      if (item?.id) {
-        await db.stockOpnameItems.update(item.id, {
-          realStock: numericVal,
-          difference: numericVal - item.systemStock
-        });
+      const item = draftItems.find(i => i.productId === productId);
+      if (item) {
+        await supabase
+          .from('stock_opname_items')
+          .update({ real_stock: numericVal, difference: numericVal - item.systemStock })
+          .eq('opname_id', activeOpname.id)
+          .eq('product_id', productId);
       }
     }
   };
@@ -298,22 +328,15 @@ export default function StockOpnamePage() {
 
       if (updatedCount > 0) {
         setDraftItems(updatedDraftItems);
-        // Persist all imported values back to Dexie
+        // Persist all imported values back to Supabase
         if (activeOpname?.id) {
-          await db.transaction('rw', [db.stockOpnameItems], async () => {
-            for (const item of updatedDraftItems) {
-              const opnameItem = await db.stockOpnameItems
-                .where('[opnameId+productId]')
-                .equals([activeOpname.id!, item.productId])
-                .first();
-              if (opnameItem?.id) {
-                await db.stockOpnameItems.update(opnameItem.id, {
-                  realStock: item.realStock,
-                  difference: item.realStock - item.systemStock
-                });
-              }
-            }
-          });
+          for (const item of updatedDraftItems) {
+            await supabase
+              .from('stock_opname_items')
+              .update({ real_stock: item.realStock, difference: item.realStock - item.systemStock })
+              .eq('opname_id', activeOpname.id)
+              .eq('product_id', item.productId);
+          }
         }
         toast.success(t('stockOpname.excel.uploadSuccess', { count: updatedCount }));
       } else {
@@ -332,10 +355,8 @@ export default function StockOpnamePage() {
     if (!activeOpname?.id) return;
     if (confirm('Batalkan sesi stock opname aktif? Semua perubahan draf akan dihapus.')) {
       try {
-        await db.transaction('rw', [db.stockOpnames, db.stockOpnameItems], async () => {
-          await db.stockOpnameItems.where('opnameId').equals(activeOpname.id!).delete();
-          await db.stockOpnames.delete(activeOpname.id!);
-        });
+        await supabase.from('stock_opname_items').delete().eq('opname_id', activeOpname.id);
+        await supabase.from('stock_opnames').delete().eq('id', activeOpname.id);
         setActiveOpname(null);
         setDraftItems([]);
         toast.info('Sesi stock opname dibatalkan');
@@ -346,59 +367,19 @@ export default function StockOpnamePage() {
     }
   };
 
-  // Complete/Submit Opname
+  // Complete/Submit Opname — atomic lewat RPC finalize_stock_opname (products,
+  // stock_opnames, stock_ins/stock_outs disesuaikan server-side dalam 1 transaksi).
   const handleSubmitOpname = async () => {
     if (!activeOpname?.id || draftItems.length === 0) return;
     setSubmitting(true);
 
     try {
-      const now = new Date();
-
-      await db.transaction('rw', [db.products, db.stockOpnames, db.stockOpnameItems, db.stockIns, db.stockOuts], async () => {
-        // 1. Update main opname status
-        await db.stockOpnames.update(activeOpname.id!, {
-          status: 'completed',
-          date: now,
-          notes: notes.trim() || undefined
-        });
-
-        // 2. Adjust stocks in products table & insert into stock movements
-        for (const item of draftItems) {
-          const diff = item.realStock - item.systemStock;
-
-          // Update product stock
-          await db.products.update(item.productId, {
-            stock: item.realStock,
-            updatedAt: now
-          });
-
-          // Insert stock movements if difference is non-zero
-          if (diff > 0) {
-            // positive adjustment = Stock In
-            const prod = await db.products.get(item.productId);
-            await db.stockIns.add({
-              productId: item.productId,
-              supplierId: 0, // 0 = adjustment / no supplier
-              quantity: diff,
-              buyPrice: prod?.hpp ?? 0,
-              totalPrice: (prod?.hpp ?? 0) * diff,
-              date: now,
-              notes: `Adjustment Stock Opname (Sesi #${activeOpname.id})`,
-              createdBy: currentUser?.id
-            });
-          } else if (diff < 0) {
-            // negative adjustment = Stock Out
-            await db.stockOuts.add({
-              productId: item.productId,
-              quantity: Math.abs(diff),
-              reason: 'opname',
-              date: now,
-              notes: `Adjustment Stock Opname (Sesi #${activeOpname.id})`,
-              createdBy: currentUser?.id
-            });
-          }
-        }
+      const { error } = await supabase.rpc('finalize_stock_opname', {
+        p_opname_id: activeOpname.id,
+        p_notes: notes.trim(),
+        p_created_by: currentUser?.id ?? null,
       });
+      if (error) throw error;
 
       toast.success(t('stockOpname.toast.saved'));
       setActiveOpname(null);
@@ -413,12 +394,12 @@ export default function StockOpnamePage() {
   };
 
   // Open history detail
-  const handleOpenHistoryDetail = async (opname: StockOpname) => {
+  const handleOpenHistoryDetail = async (opname: SupabaseStockOpname) => {
     try {
       setSelectedHistory(opname);
-      const items = await db.stockOpnameItems.where('opnameId').equals(opname.id!).toArray();
-      const prodList = await db.products.toArray();
-      const prodMap = new Map(prodList.map(p => [p.id, p]));
+      const { data: itemRows } = await supabase.from('stock_opname_items').select('*').eq('opname_id', opname.id);
+      const items = (itemRows ?? []).map(mapStockOpnameItemRow);
+      const prodMap = new Map((products ?? []).map(p => [p.id, p]));
 
       const mapped = items.map(item => {
         const p = prodMap.get(item.productId);

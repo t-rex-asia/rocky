@@ -489,6 +489,48 @@ export function mapHppHistoryRow(row: Record<string, unknown>): SupabaseHppHisto
   };
 }
 
+// --- stock_opnames / stock_opname_items -----------------------------------------
+
+export interface SupabaseStockOpname {
+  id: number;
+  date: string;
+  status: 'draft' | 'completed';
+  notes?: string;
+  createdBy?: number;
+  updatedAt: string;
+}
+
+export function mapStockOpnameRow(row: Record<string, unknown>): SupabaseStockOpname {
+  return {
+    id: row.id as number,
+    date: row.date as string,
+    status: row.status as 'draft' | 'completed',
+    notes: (row.notes as string | null) ?? undefined,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export interface SupabaseStockOpnameItem {
+  id: number;
+  opnameId: number;
+  productId: number;
+  systemStock: number;
+  realStock: number;
+  difference: number;
+}
+
+export function mapStockOpnameItemRow(row: Record<string, unknown>): SupabaseStockOpnameItem {
+  return {
+    id: row.id as number,
+    opnameId: row.opname_id as number,
+    productId: row.product_id as number,
+    systemStock: Number(row.system_stock),
+    realStock: Number(row.real_stock),
+    difference: Number(row.difference),
+  };
+}
+
 // --- users (staff PIN login) -------------------------------------------------
 // Tabel `users` di Postgres tidak boleh dibaca langsung (RLS tanpa policy,
 // menyimpan pin_hash) — hanya lewat view `users_public` (kolom aman) dan
