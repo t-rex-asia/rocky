@@ -28,7 +28,6 @@ interface PrintData {
   paymentMethodName: string;
   cashierName?: string;
   language?: string;
-  isCloudActive?: boolean;
   dueDate?: Date;
   customerPhone?: string;
 }
@@ -105,7 +104,6 @@ export const getESCPOSData = ({
   paymentMethodName,
   cashierName,
   language,
-  isCloudActive,
   dueDate,
   customerPhone,
 }: PrintData): string => {
@@ -158,8 +156,7 @@ export const getESCPOSData = ({
   lines.push('\x1B\x61\x01'); // Center
   lines.push(`${storeSettings?.receiptFooter || 'Terima kasih!'}\n`);
 
-  const cloudActive = isCloudActive !== undefined ? isCloudActive : !!storeSettings?.cloudStoreId;
-  const hideWatermark = !!storeSettings?.hideWatermark && cloudActive;
+  const hideWatermark = !!storeSettings?.hideWatermark;
   if (!hideWatermark) {
     const lang = language || 'id';
     let line1 = 'Dicetak Dari Aplikasi Kasir';
@@ -203,7 +200,6 @@ export interface DailyReportPrintData {
   expensesAmount?: number;
   netProfit?: number;
   language?: string;
-  isCloudActive?: boolean;
 }
 
 export const getDailyReportESCPOSData = ({
@@ -222,7 +218,6 @@ export const getDailyReportESCPOSData = ({
   expensesAmount = 0,
   netProfit = 0,
   language,
-  isCloudActive,
 }: DailyReportPrintData): string => {
   const lines: string[] = [];
   const rp = (n: number) => `Rp ${n.toLocaleString('id-ID')}`;
@@ -302,8 +297,7 @@ export const getDailyReportESCPOSData = ({
   lines.push('         END OF REPORT          \n');
   if (cashierName) lines.push(`Dicetak oleh: ${cashierName}\n`);
   
-  const cloudActive = isCloudActive !== undefined ? isCloudActive : !!storeSettings?.cloudStoreId;
-  const hideWatermark = !!storeSettings?.hideWatermark && cloudActive;
+  const hideWatermark = !!storeSettings?.hideWatermark;
   if (!hideWatermark) {
     const lang = language || 'id';
     let line1 = 'Dicetak Dari Aplikasi Kasir';
@@ -325,7 +319,7 @@ export const getDailyReportESCPOSData = ({
 
 export const convertBase64ToEscPosImage = (
   base64Str: string,
-  targetWidth = 192
+  targetWidth = 320
 ): Promise<Uint8Array | null> => {
   return new Promise((resolve) => {
     const img = new Image();

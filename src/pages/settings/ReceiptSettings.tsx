@@ -1,7 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '@/lib/db';
 import { useStoreSettings } from '@/hooks/use-store-settings';
 import { Receipt, ChevronLeft, Save } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -11,7 +9,6 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/use-auth';
-import { useCloudAuth } from '@/hooks/use-cloud-auth';
 import LockedPage from '@/components/LockedPage';
 import { toast } from 'sonner';
 
@@ -19,14 +16,9 @@ export default function ReceiptSettings() {
   const { t } = useTranslation('settings');
   const { can } = useAuth();
   const { settings, updateSettings } = useStoreSettings();
-  // cloudStoreId adalah field lokal (belum dimigrasikan, milik fitur cloud-backup lama)
-  const localSettings = useLiveQuery(() => db.storeSettings.toCollection().first());
-  const { isLoggedIn: cloudLoggedIn, isSyncSubscribed: cloudSubscribed } = useCloudAuth();
   const [footerText, setFooterText] = useState('');
   const [printLogo, setPrintLogo] = useState(false);
   const [hideWatermark, setHideWatermark] = useState(false);
-
-  const isCloudActive = cloudLoggedIn && cloudSubscribed && !!localSettings?.cloudStoreId;
 
   // Sync state with db loaded value
   useEffect(() => {
@@ -46,7 +38,7 @@ export default function ReceiptSettings() {
       await updateSettings({
         receiptFooter: footerText.trim(),
         printLogo,
-        hideWatermark: hideWatermark && isCloudActive,
+        hideWatermark,
       });
       toast.success(t('receiptSettings.saveSuccess'));
     } catch {
@@ -92,22 +84,16 @@ export default function ReceiptSettings() {
           {/* Watermark Toggle */}
           <div className="flex items-start justify-between gap-4 pb-4 border-b border-border/50">
             <div className="space-y-0.5">
-              <Label 
-                htmlFor="hide-watermark-switch" 
-                className={`text-sm font-semibold cursor-pointer ${!isCloudActive ? 'opacity-70' : ''}`}
-              >
+              <Label htmlFor="hide-watermark-switch" className="text-sm font-semibold cursor-pointer">
                 {t('receiptSettings.hideWatermarkLabel')}
               </Label>
               <p className="text-[10px] text-muted-foreground leading-normal">
-                {isCloudActive 
-                  ? t('receiptSettings.hideWatermarkDescActive') 
-                  : t('receiptSettings.hideWatermarkDescRequired')}
+                {t('receiptSettings.hideWatermarkDescActive')}
               </p>
             </div>
             <Switch
               id="hide-watermark-switch"
-              checked={hideWatermark && isCloudActive}
-              disabled={!isCloudActive}
+              checked={hideWatermark}
               onCheckedChange={setHideWatermark}
             />
           </div>
@@ -151,7 +137,7 @@ export default function ReceiptSettings() {
                 <img
                   src={settings.logo}
                   alt="Store Logo"
-                  className="w-12 h-12 object-contain filter grayscale contrast-125"
+                  className="w-24 h-24 object-contain filter grayscale contrast-125"
                 />
               </div>
             )}
@@ -183,10 +169,10 @@ export default function ReceiptSettings() {
             </div>
 
             {/* Watermark preview */}
-            {!(hideWatermark && isCloudActive) && (
+            {!hideWatermark && (
               <div className="text-center text-[10px] text-zinc-500 pt-2 border-t border-dotted border-zinc-200 dark:border-zinc-800 space-y-0.5">
-                <p>Dicetak Dari Aplikasi</p>
-                <p className="font-semibold">FreeKasir.com</p>
+                <p>Dicetak Dari Aplikasi Kasir</p>
+                <p className="font-semibold">Rocky Advertising</p>
               </div>
             )}
           </CardContent>

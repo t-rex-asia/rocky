@@ -13,7 +13,6 @@ import { supabase, mapCustomerRow, type SupabaseTransaction as Transaction, type
 import { isNativePlatform, printNativeBluetooth, getESCPOSData, convertBase64ToEscPosImage } from '@/lib/printer';
 import { Capacitor } from '@capacitor/core';
 import { downloadOrShareFile } from '@/lib/file-utils';
-import { useCloudAuth } from '@/hooks/use-cloud-auth';
 
 const LOCALES: Record<string, Locale> = { id, en: enUS, ms };
 const NUMBER_LOCALES: Record<string, string> = { id: 'id-ID', en: 'en-US', ms: 'ms-MY' };
@@ -31,8 +30,6 @@ interface ReceiptProps {
 
 export default function Receipt({ open, onClose, transaction, items, storeSettings, paymentMethodName, cashierName, dueDate }: ReceiptProps) {
   const { t, i18n } = useTranslation('settings');
-  const { isLoggedIn: cloudLoggedIn, isSyncSubscribed: cloudSubscribed } = useCloudAuth();
-  const isCloudActive = cloudLoggedIn && cloudSubscribed && !!storeSettings?.cloudStoreId;
   const receiptRef = useRef<HTMLDivElement>(null);
   const [generating, setGenerating] = useState(false);
 
@@ -147,7 +144,6 @@ export default function Receipt({ open, onClose, transaction, items, storeSettin
       paymentMethodName,
       cashierName,
       language: i18n.language,
-      isCloudActive,
       dueDate,
       customerPhone,
     };
@@ -216,7 +212,7 @@ export default function Receipt({ open, onClose, transaction, items, storeSettin
           {/* Store Header */}
           <div className="text-center mb-2">
             {storeSettings?.logo && (
-              <img src={storeSettings.logo} alt={storeName} className="w-28 h-28 object-contain mx-auto mb-1" />
+              <img src={storeSettings.logo} alt={storeName} className="w-40 h-40 object-contain mx-auto mb-1" />
             )}
             {!storeSettings?.logo && <p className="font-bold text-sm">{storeName}</p>}
             {storeSettings?.address && <p className="text-[10px]">{storeSettings.address}</p>}
@@ -330,7 +326,7 @@ export default function Receipt({ open, onClose, transaction, items, storeSettin
           </p>
 
           {/* Watermark */}
-          {!(storeSettings?.hideWatermark && isCloudActive) && (
+          {!storeSettings?.hideWatermark && (
             <div className="text-center text-[9px] text-gray-400 mt-2 pt-1 border-t border-dotted border-gray-200 space-y-0.5">
               <p>{t('receipt.watermarkLine1')}</p>
               <p className="font-semibold">{t('receipt.watermarkLine2')}</p>
