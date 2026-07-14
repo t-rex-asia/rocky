@@ -364,6 +364,131 @@ export function expenseCategoryToRow(data: Partial<Omit<SupabaseExpenseCategory,
   return row;
 }
 
+// --- expenses ------------------------------------------------------------------
+
+export interface SupabaseExpense {
+  id: number;
+  title: string;
+  categoryId: number;
+  amount: number;
+  paymentMethodId: number;
+  date: string;
+  notes?: string;
+  createdAt: string;
+  createdBy?: number;
+  isDeleted: number;
+  deletedAt: string | null;
+  updatedAt: string;
+}
+
+export function mapExpenseRow(row: Record<string, unknown>): SupabaseExpense {
+  return {
+    id: row.id as number,
+    title: row.title as string,
+    categoryId: row.category_id as number,
+    amount: Number(row.amount),
+    paymentMethodId: row.payment_method_id as number,
+    date: row.date as string,
+    notes: (row.notes as string | null) ?? undefined,
+    createdAt: row.created_at as string,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    isDeleted: row.is_deleted as number,
+    deletedAt: row.deleted_at as string | null,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export function expenseToRow(data: Partial<Omit<SupabaseExpense, 'id'>>): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  if (data.title !== undefined) row.title = data.title;
+  if (data.categoryId !== undefined) row.category_id = data.categoryId;
+  if (data.amount !== undefined) row.amount = data.amount;
+  if (data.paymentMethodId !== undefined) row.payment_method_id = data.paymentMethodId;
+  if (data.date !== undefined) row.date = data.date;
+  if (data.notes !== undefined) row.notes = data.notes ?? null;
+  if (data.createdBy !== undefined) row.created_by = data.createdBy;
+  if (data.isDeleted !== undefined) row.is_deleted = data.isDeleted;
+  if (data.deletedAt !== undefined) row.deleted_at = data.deletedAt;
+  row.updated_at = new Date().toISOString();
+  return row;
+}
+
+// --- stock_ins / stock_outs / hpp_history (read-only lists; tulis lewat RPC) ---
+
+export interface SupabaseStockIn {
+  id: number;
+  productId: number;
+  supplierId: number;
+  quantity: number;
+  buyPrice: number;
+  totalPrice: number;
+  date: string;
+  notes?: string;
+  createdBy?: number;
+  updatedAt: string;
+}
+
+export function mapStockInRow(row: Record<string, unknown>): SupabaseStockIn {
+  return {
+    id: row.id as number,
+    productId: row.product_id as number,
+    supplierId: row.supplier_id as number,
+    quantity: Number(row.quantity),
+    buyPrice: Number(row.buy_price),
+    totalPrice: Number(row.total_price),
+    date: row.date as string,
+    notes: (row.notes as string | null) ?? undefined,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export interface SupabaseStockOut {
+  id: number;
+  productId: number;
+  quantity: number;
+  reason: string;
+  date: string;
+  notes?: string;
+  createdBy?: number;
+  updatedAt: string;
+}
+
+export function mapStockOutRow(row: Record<string, unknown>): SupabaseStockOut {
+  return {
+    id: row.id as number,
+    productId: row.product_id as number,
+    quantity: Number(row.quantity),
+    reason: row.reason as string,
+    date: row.date as string,
+    notes: (row.notes as string | null) ?? undefined,
+    createdBy: (row.created_by as number | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+export interface SupabaseHppHistory {
+  id: number;
+  productId: number;
+  oldHpp: number;
+  newHpp: number;
+  source: 'stock_in' | 'manual';
+  date: string;
+  updatedAt: string;
+}
+
+export function mapHppHistoryRow(row: Record<string, unknown>): SupabaseHppHistory {
+  return {
+    id: row.id as number,
+    productId: row.product_id as number,
+    oldHpp: Number(row.old_hpp),
+    newHpp: Number(row.new_hpp),
+    source: row.source as 'stock_in' | 'manual',
+    date: row.date as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
 // --- users (staff PIN login) -------------------------------------------------
 // Tabel `users` di Postgres tidak boleh dibaca langsung (RLS tanpa policy,
 // menyimpan pin_hash) — hanya lewat view `users_public` (kolom aman) dan

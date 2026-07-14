@@ -1,6 +1,8 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Expense } from '@/lib/db';
-import { supabase, mapExpenseCategoryRow, mapPaymentMethodRow, type SupabaseExpenseCategory, type SupabasePaymentMethod } from '@/lib/supabase';
+import {
+  supabase,
+  mapExpenseCategoryRow, mapPaymentMethodRow, mapExpenseRow, expenseToRow,
+  type SupabaseExpenseCategory, type SupabasePaymentMethod, type SupabaseExpense,
+} from '@/lib/supabase';
 import { useState, useMemo, useEffect } from 'react';
 import { Wallet, Plus, ChevronLeft, Edit2, Trash2, Calendar, Receipt, FilterX } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -101,21 +103,22 @@ export default function ExpensesPage() {
   const [notes, setNotes] = useState('');
 
   // Delete confirmation
-  const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SupabaseExpense | null>(null);
 
-  const expenses = useLiveQuery(async () => {
-    const start = rangeStart(range);
-    const all = start
-      ? await db.expenses.where('date').aboveOrEqual(start).toArray()
-      : await db.expenses.toArray();
-    return all.filter((e) => e.isDeleted === 0).sort((a, b) => +new Date(b.date) - +new Date(a.date));
-  }, [range]);
-
+  const [expenses, setExpenses] = useState<SupabaseExpense[] | undefined>(undefined);
   const [categories, setCategories] = useState<SupabaseExpenseCategory[] | undefined>(undefined);
   const [paymentMethods, setPaymentMethods] = useState<SupabasePaymentMethod[] | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
+    const loadExpenses = async () => {
+      const start = rangeStart(range);
+      let query = supabase.from('expenses').select('*').eq('is_deleted', 0).order('date', { ascending: false });
+      if (start) query = query.gte('date', start.toISOString());
+      const { data, error } = await query;
+      if (active && !error && data) setExpenses(data.map(mapExpenseRow));
+      if (error) console.error('Gagal memuat pengeluaran:', error);
+    };
     const loadCategories = async () => {
       const { data, error } = await supabase.from('expense_categories').select('*').eq('is_deleted', 0).order('name');
       if (active && !error && data) setCategories(data.map(mapExpenseCategoryRow));
@@ -126,11 +129,13 @@ export default function ExpensesPage() {
       if (active && !error && data) setPaymentMethods(data.map(mapPaymentMethodRow));
       if (error) console.error('Gagal memuat metode pembayaran:', error);
     };
+    loadExpenses();
     loadCategories();
     loadPaymentMethods();
 
     const channel = supabase
       .channel('expenses-page-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, loadExpenses)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'expense_categories' }, loadCategories)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, loadPaymentMethods)
       .subscribe();
@@ -139,7 +144,7 @@ export default function ExpensesPage() {
       active = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [range]);
 
   const canManage = can('manage_expenses');
   const canView = can('view_expenses') || canManage;
@@ -179,7 +184,7 @@ export default function ExpensesPage() {
     setDialogOpen(true);
   };
 
-  const openEdit = (exp: Expense) => {
+  const openEdit = (exp: SupabaseExpense) => {
     setEditing(exp);
     setTitle(exp.title);
     setCategoryId(String(exp.categoryId));
@@ -217,44 +222,42 @@ export default function ExpensesPage() {
     // Build a Date at midnight local; users only pick date, not time.
     const expenseDate = new Date(`${date}T00:00:00`);
 
-    try {
-      if (editing?.id) {
-        await db.expenses.update(editing.id, {
-          title: trimmedTitle,
-          categoryId: Number(categoryId),
-          amount: numericAmount,
-          paymentMethodId: Number(paymentMethodId),
-          date: expenseDate,
-          notes: notes.trim() || undefined,
-        });
-        toast.success(t('expenses.toast.updated'));
-      } else {
-        await db.expenses.add({
-          title: trimmedTitle,
-          categoryId: Number(categoryId),
-          amount: numericAmount,
-          paymentMethodId: Number(paymentMethodId),
-          date: expenseDate,
-          notes: notes.trim() || undefined,
-          createdAt: new Date(),
+    const payload = {
+      title: trimmedTitle,
+      categoryId: Number(categoryId),
+      amount: numericAmount,
+      paymentMethodId: Number(paymentMethodId),
+      date: expenseDate.toISOString(),
+      notes: notes.trim() || undefined,
+    };
+
+    const { error } = editing?.id
+      ? await supabase.from('expenses').update(expenseToRow(payload)).eq('id', editing.id)
+      : await supabase.from('expenses').insert(expenseToRow({
+          ...payload,
           createdBy: currentUser?.id,
           isDeleted: 0,
           deletedAt: null,
-        });
-        toast.success(t('expenses.toast.added'));
-      }
-      setDialogOpen(false);
-    } catch {
+        }));
+
+    if (error) {
       toast.error(t('expenses.toast.saveFailed'));
+      return;
     }
+    toast.success(editing ? t('expenses.toast.updated') : t('expenses.toast.added'));
+    setDialogOpen(false);
   };
 
   const handleDelete = async () => {
     if (!deleteTarget?.id) return;
-    await db.expenses.update(deleteTarget.id, {
-      isDeleted: 1,
-      deletedAt: new Date(),
-    });
+    const { error } = await supabase
+      .from('expenses')
+      .update(expenseToRow({ isDeleted: 1, deletedAt: new Date().toISOString() }))
+      .eq('id', deleteTarget.id);
+    if (error) {
+      toast.error(t('expenses.toast.saveFailed'));
+      return;
+    }
     toast.success(t('expenses.toast.deleted'));
     setDeleteTarget(null);
   };

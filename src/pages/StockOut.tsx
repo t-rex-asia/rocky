@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged } from '@/lib/db';
-import { supabase, mapProductRow, productToRow, type SupabaseProduct } from '@/lib/supabase';
+import { isStockManaged } from '@/lib/db';
+import { supabase, mapProductRow, mapStockOutRow, type SupabaseProduct, type SupabaseStockOut } from '@/lib/supabase';
 import { useState, useMemo, useEffect } from 'react';
 import { ArrowUpFromLine, Plus, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -38,7 +37,7 @@ export default function StockOutPage() {
   const [reason, setReason] = useState('');
   const [notes, setNotes] = useState('');
 
-  const stockOuts = useLiveQuery(() => db.stockOuts.orderBy('date').reverse().toArray());
+  const [stockOuts, setStockOuts] = useState<SupabaseStockOut[] | undefined>(undefined);
   const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
 
   useEffect(() => {
@@ -48,11 +47,18 @@ export default function StockOutPage() {
       if (active && !error && data) setProducts(data.map(mapProductRow));
       if (error) console.error('Gagal memuat produk:', error);
     };
+    const loadStockOuts = async () => {
+      const { data, error } = await supabase.from('stock_outs').select('*').order('date', { ascending: false });
+      if (active && !error && data) setStockOuts(data.map(mapStockOutRow));
+      if (error) console.error('Gagal memuat stock out:', error);
+    };
     loadProducts();
+    loadStockOuts();
 
     const channel = supabase
       .channel('stock-out-page-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_outs' }, loadStockOuts)
       .subscribe();
 
     return () => {
@@ -92,18 +98,20 @@ export default function StockOutPage() {
       return;
     }
 
-    await db.stockOuts.add({
-      productId: Number(productId),
-      quantity: qty,
-      reason,
-      date: new Date(),
-      notes: notes.trim(),
-      createdBy: currentUser?.id,
+    const { error } = await supabase.rpc('record_stock_out', {
+      p_product_id: Number(productId),
+      p_quantity: qty,
+      p_reason: reason,
+      p_notes: notes.trim(),
+      p_created_by: currentUser?.id ?? null,
     });
 
-    await supabase.from('products').update(productToRow({
-      stock: Math.round((product.stock - qty) * 1e6) / 1e6,
-    })).eq('id', product.id);
+    if (error) {
+      toast.error(error.message?.includes('insufficient_stock')
+        ? t('stockOut.toast.exceedsStock')
+        : t('stockOut.toast.saveFailed', { defaultValue: 'Gagal menyimpan stock out' }));
+      return;
+    }
 
     toast.success(t('stockOut.toast.success', { product: product.name, qty }));
     setDialogOpen(false);

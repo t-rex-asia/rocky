@@ -1,6 +1,5 @@
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, isStockManaged } from '@/lib/db';
-import { supabase, mapProductRow, mapSupplierRow, productToRow, type SupabaseProduct, type SupabaseSupplier } from '@/lib/supabase';
+import { isStockManaged } from '@/lib/db';
+import { supabase, mapProductRow, mapSupplierRow, mapStockInRow, type SupabaseProduct, type SupabaseSupplier, type SupabaseStockIn } from '@/lib/supabase';
 import { useState, useEffect } from 'react';
 import { ArrowDownToLine, Plus, ChevronLeft } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
@@ -39,7 +38,7 @@ export default function StockInPage() {
   const [notes, setNotes] = useState('');
   const [filterSupplier, setFilterSupplier] = useState('all');
 
-  const stockIns = useLiveQuery(() => db.stockIns.orderBy('date').reverse().toArray());
+  const [stockIns, setStockIns] = useState<SupabaseStockIn[] | undefined>(undefined);
   const [products, setProducts] = useState<SupabaseProduct[] | undefined>(undefined);
   const [suppliers, setSuppliers] = useState<SupabaseSupplier[] | undefined>(undefined);
 
@@ -55,13 +54,20 @@ export default function StockInPage() {
       if (active && !error && data) setSuppliers(data.map(mapSupplierRow));
       if (error) console.error('Gagal memuat supplier:', error);
     };
+    const loadStockIns = async () => {
+      const { data, error } = await supabase.from('stock_ins').select('*').order('date', { ascending: false });
+      if (active && !error && data) setStockIns(data.map(mapStockInRow));
+      if (error) console.error('Gagal memuat stock in:', error);
+    };
     loadProducts();
     loadSuppliers();
+    loadStockIns();
 
     const channel = supabase
       .channel('stock-in-page-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, loadProducts)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'suppliers' }, loadSuppliers)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_ins' }, loadStockIns)
       .subscribe();
 
     return () => {
@@ -97,36 +103,22 @@ export default function StockInPage() {
     const product = products?.find(p => p.id === Number(productId));
     if (!product) return;
 
-    await db.stockIns.add({
-      productId: Number(productId),
-      supplierId: Number(supplierId),
-      quantity: qty,
-      buyPrice: price,
-      totalPrice: qty * price,
-      date: new Date(),
-      notes: notes.trim(),
-      createdBy: currentUser?.id,
+    const { data, error } = await supabase.rpc('record_stock_in', {
+      p_product_id: Number(productId),
+      p_supplier_id: Number(supplierId),
+      p_quantity: qty,
+      p_buy_price: price,
+      p_notes: notes.trim(),
+      p_created_by: currentUser?.id ?? null,
     });
 
-    const oldStock = product.stock;
-    const oldHpp = product.hpp;
-    const newStock = Math.round((oldStock + qty) * 1e6) / 1e6;
-    const newHpp = newStock > 0 ? ((oldStock * oldHpp) + (qty * price)) / newStock : price;
+    if (error) {
+      toast.error(t('stockIn.toast.saveFailed', { defaultValue: 'Gagal menyimpan stock in' }));
+      return;
+    }
 
-    await db.hppHistory.add({
-      productId: product.id!,
-      oldHpp,
-      newHpp,
-      source: 'stock_in',
-      date: new Date(),
-    });
-
-    await supabase.from('products').update(productToRow({
-      stock: newStock,
-      hpp: Math.round(newHpp),
-    })).eq('id', product.id);
-
-    toast.success(t('stockIn.toast.success', { product: product.name, qty, hpp: Math.round(newHpp).toLocaleString(numberLocale) }));
+    const newHpp = (data as { newHpp: number }).newHpp;
+    toast.success(t('stockIn.toast.success', { product: product.name, qty, hpp: newHpp.toLocaleString(numberLocale) }));
     setDialogOpen(false);
   };
 
