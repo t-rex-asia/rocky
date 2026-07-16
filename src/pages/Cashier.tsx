@@ -420,7 +420,7 @@ export default function Kasir() {
         p_cart: cartPayload,
         p_debt: null,
       });
-      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
+      if (error) { console.error('checkout_update_open_bill error:', error); toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
 
       const { data: txRow } = await supabase.from('transactions').select('*').eq('id', editingTxId).maybeSingle();
       const updatedTx = txRow ? mapTransactionRow(txRow) : null;
@@ -443,7 +443,7 @@ export default function Kasir() {
         p_cart: cartPayload,
         p_debt: null,
       });
-      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
+      if (error) { console.error('checkout_new error:', error); toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan open bill' })); return; }
 
       const txId = (data as { id: number }).id;
       const { data: txRow } = await supabase.from('transactions').select('*').eq('id', txId).maybeSingle();
@@ -495,6 +495,7 @@ export default function Kasir() {
     if (!tx.id) return;
     const { error } = await supabase.rpc('cancel_open_bill', { p_transaction_id: tx.id });
     if (error) {
+      console.error('cancel_open_bill error:', error);
       toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal membatalkan open bill' }));
       return;
     }
@@ -567,7 +568,7 @@ export default function Kasir() {
         p_cart: cartPayload,
         p_debt: debtPayload,
       });
-      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
+      if (error) { console.error('checkout_update_open_bill (checkout) error:', error); toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
 
       const { data: txRow } = await supabase.from('transactions').select('*').eq('id', editingTxId).maybeSingle();
       const updatedTx = txRow ? mapTransactionRow(txRow) : null;
@@ -594,7 +595,7 @@ export default function Kasir() {
         p_cart: cartPayload,
         p_debt: debtPayload,
       });
-      if (error) { toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
+      if (error) { console.error('checkout_new (checkout) error:', error); toast.error(t('cashier.toast.saveFailed', { defaultValue: 'Gagal menyimpan transaksi' })); return; }
 
       const txId = (data as { id: number }).id;
       const { data: txRow } = await supabase.from('transactions').select('*').eq('id', txId).maybeSingle();
