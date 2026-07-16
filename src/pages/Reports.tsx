@@ -19,8 +19,6 @@ import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { useAuth } from '@/hooks/use-auth';
 import LockedPage from '@/components/LockedPage';
 import ExportReportDialog from '@/components/reports/ExportReportDialog';
-import UserTypeModal from '@/components/UserTypeModal';
-import { shouldShowUserTypeSurvey } from '@/lib/user-type';
 import { toast } from 'sonner';
 import { isNativePlatform, printRawNativeBluetooth, getDailyReportESCPOSData, type DailyReportPrintData } from '@/lib/printer';
 import DailyReportReceipt from '@/components/reports/DailyReportReceipt';
@@ -40,19 +38,11 @@ export default function Laporan() {
   const [selectedDate, setSelectedDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [includeExpenses, setIncludeExpenses] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
-  const [surveyOpen, setSurveyOpen] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportData, setReportData] = useState<DailyReportPrintData | null>(null);
   const [shouldRequestReviewOnClose, setShouldRequestReviewOnClose] = useState(false);
   const days = period === 'daily' ? 1 : Number(period);
-
-  useEffect(() => {
-    if (shouldShowUserTypeSurvey()) {
-      const t = setTimeout(() => setSurveyOpen(true), 600);
-      return () => clearTimeout(t);
-    }
-  }, []);
 
   const dateRange = (() => {
     if (period === 'daily') {
@@ -293,7 +283,6 @@ export default function Laporan() {
         defaultEndMs={dateRange.end.getTime()}
       />
 
-      <UserTypeModal open={surveyOpen} onClose={() => setSurveyOpen(false)} />
 
       {reportData && (
         <DailyReportReceipt
